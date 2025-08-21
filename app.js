@@ -1,3 +1,208 @@
+// IndexedDB wrapper dla Vawik
+class VawikDB {
+    constructor() {
+        this.db = null;
+        this.dbName = 'VawikAudioDB';
+        this.dbVersion = 1;
+    }
+
+    async init() {
+        console.log('🗄️ [DB] Inicjalizacja IndexedDB');
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(this.dbName, this.dbVersion);
+            
+            request.onerror = () => {
+                console.error('❌ [DB] Błąd otwarcia IndexedDB:', request.error);
+                reject(request.error);
+            };
+            
+            request.onsuccess = () => {
+                this.db = request.result;
+                console.log('✅ [DB] IndexedDB zainicjalizowane');
+                resolve(this.db);
+            };
+            
+            request.onupgradeneeded = (event) => {
+                console.log('🔧 [DB] Aktualizacja struktury bazy danych');
+                const db = event.target.result;
+                
+                // Store dla nagrań audio
+                if (!db.objectStoreNames.contains('recordings')) {
+                    const recordingsStore = db.createObjectStore('recordings', { keyPath: 'id' });
+                    recordingsStore.createIndex('date', 'date', { unique: false });
+                    console.log('📁 [DB] Utworzono store "recordings"');
+                }
+                
+                // Store dla tytułów nagrań
+                if (!db.objectStoreNames.contains('titles')) {
+                    db.createObjectStore('titles', { keyPath: 'recordingId' });
+                    console.log('📁 [DB] Utworzono store "titles"');
+                }
+                
+                // Store dla backupów nagrań
+                if (!db.objectStoreNames.contains('backups')) {
+                    db.createObjectStore('backups', { keyPath: 'id' });
+                    console.log('📁 [DB] Utworzono store "backups"');
+                }
+            };
+        });
+    }
+
+    async saveRecording(recording) {
+        console.log(`💾 [DB] Zapisuję nagranie ID: ${recording.id}`);
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['recordings'], 'readwrite');
+            const store = transaction.objectStore('recordings');
+            const request = store.put(recording);
+            
+            request.onsuccess = () => {
+                console.log(`✅ [DB] Nagranie ${recording.id} zapisane`);
+                resolve();
+            };
+            
+            request.onerror = () => {
+                console.error(`❌ [DB] Błąd zapisu nagrania ${recording.id}:`, request.error);
+                reject(request.error);
+            };
+        });
+    }
+
+    async getRecordings() {
+        console.log('📖 [DB] Pobieranie wszystkich nagrań');
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['recordings'], 'readonly');
+            const store = transaction.objectStore('recordings');
+            const request = store.getAll();
+            
+            request.onsuccess = () => {
+                const recordings = request.result.sort((a, b) => new Date(b.date) - new Date(a.date));
+                console.log(`📊 [DB] Pobrano ${recordings.length} nagrań`);
+                resolve(recordings);
+            };
+            
+            request.onerror = () => {
+                console.error('❌ [DB] Błąd pobierania nagrań:', request.error);
+                reject(request.error);
+            };
+        });
+    }
+
+    async deleteRecording(id) {
+        console.log(`🗑️ [DB] Usuwanie nagrania ID: ${id}`);
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['recordings'], 'readwrite');
+            const store = transaction.objectStore('recordings');
+            const request = store.delete(id);
+            
+            request.onsuccess = () => {
+                console.log(`✅ [DB] Nagranie ${id} usunięte`);
+                resolve();
+            };
+            
+            request.onerror = () => {
+                console.error(`❌ [DB] Błąd usuwania nagrania ${id}:`, request.error);
+                reject(request.error);
+            };
+        });
+    }
+
+    async saveTitle(recordingId, title) {
+        console.log(`💾 [DB] Zapisuję tytuł dla ${recordingId}: "${title}"`);
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['titles'], 'readwrite');
+            const store = transaction.objectStore('titles');
+            const request = store.put({ recordingId, title });
+            
+            request.onsuccess = () => {
+                console.log(`✅ [DB] Tytuł zapisany dla ${recordingId}`);
+                resolve();
+            };
+            
+            request.onerror = () => {
+                console.error(`❌ [DB] Błąd zapisu tytułu dla ${recordingId}:`, request.error);
+                reject(request.error);
+            };
+        });
+    }
+
+    async getTitle(recordingId) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['titles'], 'readonly');
+            const store = transaction.objectStore('titles');
+            const request = store.get(recordingId);
+            
+            request.onsuccess = () => {
+                const result = request.result?.title || null;
+                console.log(`🔍 [DB] Tytuł dla ${recordingId}: "${result}"`);
+                resolve(result);
+            };
+            
+            request.onerror = () => {
+                console.error(`❌ [DB] Błąd pobierania tytułu dla ${recordingId}:`, request.error);
+                reject(request.error);
+            };
+        });
+    }
+
+    async saveBackup(backup) {
+        console.log(`💾 [DB] Zapisuję backup ID: ${backup.id}`);
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['backups'], 'readwrite');
+            const store = transaction.objectStore('backups');
+            const request = store.put(backup);
+            
+            request.onsuccess = () => {
+                console.log(`✅ [DB] Backup ${backup.id} zapisany`);
+                resolve();
+            };
+            
+            request.onerror = () => {
+                console.error(`❌ [DB] Błąd zapisu backupu ${backup.id}:`, request.error);
+                reject(request.error);
+            };
+        });
+    }
+
+    async getBackup() {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['backups'], 'readonly');
+            const store = transaction.objectStore('backups');
+            const request = store.getAll();
+            
+            request.onsuccess = () => {
+                const backups = request.result;
+                const latestBackup = backups.length > 0 ? backups[backups.length - 1] : null;
+                console.log(`📖 [DB] Pobrano ${backups.length} backupów, najnowszy: ${latestBackup?.id || 'brak'}`);
+                resolve(latestBackup);
+            };
+            
+            request.onerror = () => {
+                console.error('❌ [DB] Błąd pobierania backupów:', request.error);
+                reject(request.error);
+            };
+        });
+    }
+
+    async clearBackups() {
+        console.log('🧹 [DB] Czyszczenie backupów');
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['backups'], 'readwrite');
+            const store = transaction.objectStore('backups');
+            const request = store.clear();
+            
+            request.onsuccess = () => {
+                console.log('✅ [DB] Backupy wyczyszczone');
+                resolve();
+            };
+            
+            request.onerror = () => {
+                console.error('❌ [DB] Błąd czyszczenia backupów:', request.error);
+                reject(request.error);
+            };
+        });
+    }
+}
+
 class AudioRecorder {
     constructor() {
         this.mediaRecorder = null;
@@ -12,6 +217,7 @@ class AudioRecorder {
         this.isCancelling = false;
         this.titleGenerationTimeout = null;
         this.isGeneratingTitle = false;
+        this.db = new VawikDB();
         
         this.recordButton = document.getElementById('recordButton');
         this.status = document.getElementById('status');
@@ -25,6 +231,17 @@ class AudioRecorder {
     }
     
     async init() {
+        console.log('🚀 [INIT] Inicjalizacja aplikacji');
+        
+        // Inicjalizuj IndexedDB
+        try {
+            await this.db.init();
+            console.log('✅ [INIT] Baza danych gotowa');
+        } catch (error) {
+            console.error('❌ [INIT] Błąd inicjalizacji bazy danych:', error);
+            alert('Błąd inicjalizacji bazy danych. Aplikacja może nie działać poprawnie.');
+        }
+        
         this.recordButton.addEventListener('click', () => {
             if (this.isRecording) {
                 this.stopRecording();
@@ -42,9 +259,9 @@ class AudioRecorder {
         });
         
         // Sprawdź czy jest przerwane nagranie do odzyskania
-        this.checkForInterruptedRecording();
+        await this.checkForInterruptedRecording();
         
-        this.loadRecordings();
+        await this.loadRecordings();
         
         // Żądanie uprawnień do mikrofonu przy starcie
         try {
@@ -88,8 +305,7 @@ class AudioRecorder {
             this.startTime = Date.now();
             this.currentRecordingId = Date.now();
             
-            // Zapisz stan nagrywania w localStorage
-            this.saveRecordingState();
+            // Stan nagrywania jest automatycznie zarządzany przez backupy w IndexedDB
             
             this.mediaRecorder.addEventListener('dataavailable', (event) => {
                 if (event.data.size > 0) {
@@ -187,13 +403,13 @@ class AudioRecorder {
         const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
         const duration = Math.floor((Date.now() - this.startTime) / 1000);
         
-        // Konwersja do base64 dla localStorage
+        // Konwersja do base64 dla IndexedDB
         const reader = new FileReader();
-        reader.onload = () => {
+        reader.onload = async () => {
             const base64Audio = reader.result.split(',')[1];
             
             // Sprawdź czy mamy wygenerowany tytuł
-            const generatedTitle = this.getRecordingTitle(this.currentRecordingId || Date.now());
+            const generatedTitle = await this.getRecordingTitle(this.currentRecordingId || Date.now());
             
             const recording = {
                 id: this.currentRecordingId || Date.now(),
@@ -205,11 +421,11 @@ class AudioRecorder {
                 corrupted: false
             };
             
-            this.saveToStorage(recording);
-            this.loadRecordings();
+            await this.saveToDatabase(recording);
+            await this.loadRecordings();
             
             // Wyczyść backup po udanym zapisaniu
-            this.clearRecordingState();
+            await this.clearRecordingState();
             
             this.status.textContent = `Nagranie zapisane (${Math.floor(duration/60)}:${(duration%60).toString().padStart(2, '0')})`;
         };
@@ -217,68 +433,76 @@ class AudioRecorder {
         reader.readAsDataURL(audioBlob);
     }
     
-    saveToStorage(recording) {
-        let recordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
-        recordings.unshift(recording); // Dodaj na początku listy
-        
-        // Ograniczenie do 50 nagrań (aby nie przekroczyć limitu localStorage)
-        if (recordings.length > 50) {
-            recordings = recordings.slice(0, 50);
+    async saveToDatabase(recording) {
+        try {
+            await this.db.saveRecording(recording);
+            console.log(`✅ [SAVE] Nagranie ${recording.id} zapisane w IndexedDB`);
+        } catch (error) {
+            console.error(`❌ [SAVE] Błąd zapisu nagrania ${recording.id}:`, error);
+            throw error;
         }
-        
-        localStorage.setItem('audioRecordings', JSON.stringify(recordings));
     }
     
-    loadRecordings() {
-        const recordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
-        
-        if (recordings.length === 0) {
-            this.recordingsList.innerHTML = '<div class="text-center pb-10 text-gray-500 italic">Brak nagrań</div>';
-            return;
-        }
-        
-        this.recordingsList.innerHTML = recordings.map(recording => {
-            const recordingDate = new Date(recording.date);
-            const now = new Date();
-            const diffTime = Math.abs(now - recordingDate);
-            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    async loadRecordings() {
+        try {
+            const recordings = await this.db.getRecordings();
             
-            let timeText;
-            if (diffDays === 0) {
-                timeText = 'Dziś';
-            } else if (diffDays === 1) {
-                timeText = 'Wczoraj';
-            } else if (diffDays < 7) {
-                timeText = `${diffDays} dni temu`;
-            } else {
-                timeText = recordingDate.toLocaleDateString('pl-PL');
+            if (recordings.length === 0) {
+                this.recordingsList.innerHTML = '<div class="text-center pb-10 text-gray-500 italic">Brak nagrań</div>';
+                return;
             }
             
-            const corruptedClasses = recording.corrupted ? 'border-red-400/40 bg-red-900/20' : 'border-white/10';
-            const corruptedTextClasses = recording.corrupted ? 'text-red-300' : 'text-gray-100';
+            console.log(`📂 [LOAD] Ładowanie ${recordings.length} nagrań do interfejsu`);
             
-            // Sprawdź czy mamy wygenerowany tytuł dla tego nagrania
-            const recordingTitle = this.getRecordingTitle(recording.id);
-            const displayTitle = recordingTitle || (recording.transcription ? recording.transcription.substring(0, 60) + (recording.transcription.length > 60 ? '...' : '') : 'Brak transkrypcji');
+            const recordingsHTML = await Promise.all(recordings.map(async recording => {
+                const recordingDate = new Date(recording.date);
+                const now = new Date();
+                const diffTime = Math.abs(now - recordingDate);
+                const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                
+                let timeText;
+                if (diffDays === 0) {
+                    timeText = 'Dziś';
+                } else if (diffDays === 1) {
+                    timeText = 'Wczoraj';
+                } else if (diffDays < 7) {
+                    timeText = `${diffDays} dni temu`;
+                } else {
+                    timeText = recordingDate.toLocaleDateString('pl-PL');
+                }
+                
+                const corruptedClasses = recording.corrupted ? 'border-red-400/40 bg-red-900/20' : 'border-white/10';
+                const corruptedTextClasses = recording.corrupted ? 'text-red-300' : 'text-gray-100';
+                
+                // Sprawdź czy mamy wygenerowany tytuł dla tego nagrania
+                const recordingTitle = await this.db.getTitle(recording.id);
+                const displayTitle = recordingTitle || (recording.transcription ? recording.transcription.substring(0, 60) + (recording.transcription.length > 60 ? '...' : '') : 'Brak transkrypcji');
+                
+                return `
+                <div class="w-full bg-white/5 backdrop-blur-sm rounded-xl py-4 px-5 mb-2 border ${corruptedClasses} flex justify-between items-center transition-all duration-200 hover:bg-white/8 hover:border-navigator-purple/30 hover:shadow-lg hover:shadow-black/10 cursor-pointer" onclick="recorder.openTranscriptionView('${recording.id}')">
+                    <div class="flex-1 text-left">
+                        <div class="text-sm text-gray-100 mb-1">
+                            ${displayTitle}
+                        </div>
+                        <div class="text-xs text-gray-400">
+                            ${Math.floor(recording.duration/60)}:${(recording.duration%60).toString().padStart(2, '0')} - ${recording.name.replace('Nagranie ', '')}
+                            ${recording.corrupted ? ' • ODZYSKANE' : ''}
+                        </div>
+                    </div>
+                    <div class="flex gap-1 items-center ml-auto">
+                        ${recording.transcription ? '<span class="text-emerald-400 text-lg">📄</span>' : 
+                          recording.transcribing ? '<span class="text-gray-400 text-lg">⏳</span>' : 
+                          '<span class="text-navigator-purple text-lg">🎤</span>'}
+                    </div>
+                </div>`;
+            }));
             
-            return `
-            <div class="w-full bg-white/5 backdrop-blur-sm rounded-xl py-4 px-5 mb-2 border ${corruptedClasses} flex justify-between items-center transition-all duration-200 hover:bg-white/8 hover:border-navigator-purple/30 hover:shadow-lg hover:shadow-black/10 cursor-pointer" onclick="recorder.openTranscriptionView('${recording.id}')">
-                <div class="flex-1 text-left">
-                    <div class="text-sm text-gray-100 mb-1">
-                        ${displayTitle}
-                    </div>
-                    <div class="text-xs text-gray-400">
-                        ${Math.floor(recording.duration/60)}:${(recording.duration%60).toString().padStart(2, '0')} - ${recording.name.replace('Nagranie ', '')}
-                        ${recording.corrupted ? ' • ODZYSKANE' : ''}
-                    </div>
-                </div>
-                <div class="flex gap-1 items-center ml-auto">
-                    ${recording.transcription ? '<span class="text-emerald-400 text-lg">📄</span>' : 
-                      recording.transcribing ? '<span class="text-gray-400 text-lg">⏳</span>' : 
-                      '<span class="text-navigator-purple text-lg">🎤</span>'}
-                </div>
-            </div>
-        `}).join('');
+            this.recordingsList.innerHTML = recordingsHTML.join('');
+            
+        } catch (error) {
+            console.error('❌ [LOAD] Błąd ładowania nagrań:', error);
+            this.recordingsList.innerHTML = '<div class="text-center pb-10 text-red-500 italic">Błąd ładowania nagrań</div>';
+        }
     }
     
     getTranscribeButtonClasses(recording) {
@@ -351,7 +575,7 @@ class AudioRecorder {
         const currentDuration = Math.floor((Date.now() - this.startTime) / 1000);
         
         const reader = new FileReader();
-        reader.onload = () => {
+        reader.onload = async () => {
             const base64Audio = reader.result.split(',')[1];
             
             const backup = {
@@ -363,49 +587,40 @@ class AudioRecorder {
                 timestamp: Date.now()
             };
             
-            localStorage.setItem('recordingBackup', JSON.stringify(backup));
-            console.log(`Backup zapisany: ${currentDuration}s`);
+            await this.db.saveBackup(backup);
+            console.log(`📦 [BACKUP] Backup zapisany: ${currentDuration}s`);
         };
         
         reader.readAsDataURL(audioBlob);
     }
     
-    saveRecordingState() {
-        const state = {
-            isRecording: true,
-            startTime: this.startTime,
-            recordingId: this.currentRecordingId
-        };
-        localStorage.setItem('recordingState', JSON.stringify(state));
+    // Funkcja usunięta - state zarządzany przez IndexedDB
+    
+    async clearRecordingState() {
+        await this.db.clearBackups();
+        console.log('🧹 [BACKUP] Stan nagrywania wyczyszczony');
     }
     
-    clearRecordingState() {
-        localStorage.removeItem('recordingState');
-        localStorage.removeItem('recordingBackup');
-    }
-    
-    checkForInterruptedRecording() {
-        const backup = localStorage.getItem('recordingBackup');
-        
-        if (backup) {
-            try {
-                const recordingBackup = JSON.parse(backup);
+    async checkForInterruptedRecording() {
+        try {
+            const backup = await this.db.getBackup();
+            
+            if (backup) {
+                console.log(`🔍 [BACKUP] Znaleziono backup: ${backup.duration}s`);
                 
                 // Sprawdź czy backup ma więcej niż 5 sekund (oznacza przerwane nagranie)
-                if (recordingBackup.duration >= 5) {
+                if (backup.duration >= 5) {
+                    console.log('🔧 [BACKUP] Backup wystarczająco długi - dodaję jako uszkodzone nagranie');
                     // Automatycznie dodaj do listy jako uszkodzone nagranie
-                    this.addCorruptedRecording(recordingBackup);
+                    await this.addCorruptedRecording(backup);
                 }
                 
                 // Wyczyść backup po sprawdzeniu
-                localStorage.removeItem('recordingBackup');
-                localStorage.removeItem('recordingState');
-                
-            } catch (error) {
-                console.error('Błąd odczytu backup:', error);
-                localStorage.removeItem('recordingBackup');
-                localStorage.removeItem('recordingState');
+                await this.db.clearBackups();
+                console.log('🧹 [BACKUP] Backup sprawdzony i wyczyszczony');
             }
+        } catch (error) {
+            console.error('❌ [BACKUP] Błąd sprawdzania przerwanego nagrania:', error);
         }
     }
     
@@ -456,76 +671,79 @@ class AudioRecorder {
         reader.readAsDataURL(audioBlob);
     }
     
-    addCorruptedRecording(backup) {
-        // Sprawdź czy to nagranie już nie istnieje
-        const existingRecordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
-        const exists = existingRecordings.find(r => r.id === backup.id);
-        
-        if (exists) {
-            console.log('Nagranie już istnieje, pomijam odzyskiwanie');
-            return;
-        }
-        
-        const byteCharacters = atob(backup.chunks);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-            byteNumbers[i] = byteCharacters.charCodeAt(i);
-        }
-        const byteArray = new Uint8Array(byteNumbers);
-        const audioBlob = new Blob([byteArray], { type: backup.mimeType });
-        
-        const reader = new FileReader();
-        reader.onload = () => {
-            const base64Audio = reader.result.split(',')[1];
+    async addCorruptedRecording(backup) {
+        try {
+            // Sprawdź czy to nagranie już nie istnieje
+            const existingRecordings = await this.db.getRecordings();
+            const exists = existingRecordings.find(r => r.id === backup.id);
             
-            const recording = {
-                id: backup.id,
-                name: `🔧 PRZERWANE: ${new Date(backup.startTime).toLocaleString('pl-PL')}`,
-                date: new Date(backup.startTime).toISOString(),
-                duration: backup.duration,
-                audio: base64Audio,
-                mimeType: backup.mimeType,
-                corrupted: true
+            if (exists) {
+                console.log('🔍 [BACKUP] Nagranie już istnieje, pomijam odzyskiwanie');
+                return;
+            }
+            
+            const byteCharacters = atob(backup.chunks);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const audioBlob = new Blob([byteArray], { type: backup.mimeType });
+            
+            const reader = new FileReader();
+            reader.onload = async () => {
+                const base64Audio = reader.result.split(',')[1];
+                
+                const recording = {
+                    id: backup.id,
+                    name: `🔧 PRZERWANE: ${new Date(backup.startTime).toLocaleString('pl-PL')}`,
+                    date: new Date(backup.startTime).toISOString(),
+                    duration: backup.duration,
+                    audio: base64Audio,
+                    mimeType: backup.mimeType,
+                    corrupted: true
+                };
+                
+                await this.saveToDatabase(recording);
+                this.status.textContent = `Odzyskano przerwane nagranie (${Math.floor(backup.duration/60)}:${(backup.duration%60).toString().padStart(2, '0')})`;
             };
             
-            this.saveToStorage(recording);
-            this.status.textContent = `Odzyskano przerwane nagranie (${Math.floor(backup.duration/60)}:${(backup.duration%60).toString().padStart(2, '0')})`;
-        };
-        
-        reader.readAsDataURL(audioBlob);
+            reader.readAsDataURL(audioBlob);
+        } catch (error) {
+            console.error('❌ [BACKUP] Błąd dodawania uszkodzonego nagrania:', error);
+        }
     }
     
     async transcribeRecording(id) {
-        const recordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
-        const recordingIndex = recordings.findIndex(r => r.id.toString() === id);
-        
-        if (recordingIndex === -1) {
-            this.status.textContent = 'Nie znaleziono nagrania';
-            return;
-        }
-        
-        const recording = recordings[recordingIndex];
-        
-        if (recording.transcription) {
-            this.status.textContent = 'Nagranie już ma transkrypcję';
-            return;
-        }
-        
-        // Sprawdź czy jest ustawiony klucz API
-        const apiKey = this.getOpenAIKey();
-        if (!apiKey) {
-            this.showAPIKeyDialog();
-            return;
-        }
-        
-        // Oznacz jako transkrybowane
-        recordings[recordingIndex].transcribing = true;
-        localStorage.setItem('audioRecordings', JSON.stringify(recordings));
-        this.loadRecordings();
-        
-        this.status.textContent = 'Wysyłam do OpenAI Whisper...';
-        
         try {
+            const recordings = await this.db.getRecordings();
+            const recording = recordings.find(r => r.id.toString() === id);
+            
+            if (!recording) {
+                this.status.textContent = 'Nie znaleziono nagrania';
+                return;
+            }
+            
+            if (recording.transcription) {
+                this.status.textContent = 'Nagranie już ma transkrypcję';
+                return;
+            }
+            
+            // Sprawdź czy jest ustawiony klucz API
+            const apiKey = this.getOpenAIKey();
+            if (!apiKey) {
+                this.showAPIKeyDialog();
+                return;
+            }
+            
+            // Oznacz jako transkrybowane
+            recording.transcribing = true;
+            await this.db.saveRecording(recording);
+            await this.loadRecordings();
+            
+            this.status.textContent = 'Wysyłam do OpenAI Whisper...';
+            
+            // Transkrypcja Whisper
             // Konwertuj base64 z powrotem do blob
             const byteCharacters = atob(recording.audio);
             const byteNumbers = new Array(byteCharacters.length);
@@ -558,10 +776,10 @@ class AudioRecorder {
             const transcriptionText = await response.text();
             
             // Zapisz transkrypcję
-            recordings[recordingIndex].transcription = transcriptionText.trim();
-            recordings[recordingIndex].transcribing = false;
-            localStorage.setItem('audioRecordings', JSON.stringify(recordings));
-            this.loadRecordings();
+            recording.transcription = transcriptionText.trim();
+            recording.transcribing = false;
+            await this.db.saveRecording(recording);
+            await this.loadRecordings();
             
             this.status.textContent = 'Transkrypcja ukończona!';
             
@@ -569,9 +787,9 @@ class AudioRecorder {
             console.error('Błąd transkrypcji:', error);
             
             // Usuń flagę transkrypcji w przypadku błędu
-            recordings[recordingIndex].transcribing = false;
-            localStorage.setItem('audioRecordings', JSON.stringify(recordings));
-            this.loadRecordings();
+            recording.transcribing = false;
+            await this.db.saveRecording(recording);
+            await this.loadRecordings();
             
             let errorMessage = 'Błąd transkrypcji';
             if (error.message.includes('401')) {
@@ -661,20 +879,21 @@ Wprowadź klucz OpenAI API:`);
         }, 2000);
     }
     
-    openTranscriptionView(id) {
-        const recordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
-        const recording = recordings.find(r => r.id.toString() === id);
-        
-        if (!recording) {
-            this.status.textContent = 'Nie znaleziono nagrania';
-            return;
-        }
+    async openTranscriptionView(id) {
+        try {
+            const recordings = await this.db.getRecordings();
+            const recording = recordings.find(r => r.id.toString() === id);
+            
+            if (!recording) {
+                this.status.textContent = 'Nie znaleziono nagrania';
+                return;
+            }
         
         // Wypełnij dane
         document.getElementById('transcriptionTitle').textContent = `Transkrypcja: ${recording.name}`;
         
-        // Sprawdź czy mamy wygenerowany tytuł dla tego nagrania
-        const recordingTitle = this.getRecordingTitle(recording.id) || 'Brak tytułu';
+            // Sprawdź czy mamy wygenerowany tytuł dla tego nagrania
+            const recordingTitle = await this.getRecordingTitle(recording.id) || 'Brak tytułu';
         
         document.getElementById('transcriptionMetadata').innerHTML = `
             <strong>Tytuł nagrania:</strong> ${recordingTitle}<br>
@@ -713,25 +932,25 @@ Wprowadź klucz OpenAI API:`);
             transcribeText.textContent = 'Transkrybuj ponownie';
             transcribeBtn.disabled = false;
             transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
-            transcribeBtn.onclick = () => {
+            transcribeBtn.onclick = async () => {
                 // Usuń istniejącą transkrypcję i rozpocznij nową
-                const updatedRecordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
-                const recordingIndex = updatedRecordings.findIndex(r => r.id.toString() === id);
-                if (recordingIndex !== -1) {
-                    delete updatedRecordings[recordingIndex].transcription;
-                    localStorage.setItem('audioRecordings', JSON.stringify(updatedRecordings));
+                const updatedRecordings = await this.db.getRecordings();
+                const currentRecording = updatedRecordings.find(r => r.id.toString() === id);
+                if (currentRecording) {
+                    delete currentRecording.transcription;
+                    await this.db.saveRecording(currentRecording);
                 }
-                this.transcribeRecording(id);
-                this.openTranscriptionView(id); // Odśwież widok
+                await this.transcribeRecording(id);
+                await this.openTranscriptionView(id); // Odśwież widok
             };
         } else {
             transcribeIcon.textContent = '🎤';
             transcribeText.textContent = 'Transkrybuj';
             transcribeBtn.disabled = false;
             transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
-            transcribeBtn.onclick = () => {
-                this.transcribeRecording(id);
-                this.openTranscriptionView(id); // Odśwież widok
+            transcribeBtn.onclick = async () => {
+                await this.transcribeRecording(id);
+                await this.openTranscriptionView(id); // Odśwież widok
             };
         }
         
@@ -739,8 +958,13 @@ Wprowadź klucz OpenAI API:`);
         const fullscreen = document.getElementById('transcriptionFullscreen');
         fullscreen.className = 'fixed inset-0 w-full h-full bg-gradient-to-br from-navigator-dark via-navigator-mid to-navigator-blue z-[1000] flex flex-col p-5 overflow-y-auto';
         
-        // Zablokuj scrollowanie body
-        document.body.style.overflow = 'hidden';
+            // Zablokuj scrollowanie body
+            document.body.style.overflow = 'hidden';
+            
+        } catch (error) {
+            console.error('❌ [VIEW] Błąd otwierania widoku transkrypcji:', error);
+            this.status.textContent = 'Błąd otwierania widoku transkrypcji';
+        }
     }
     
     closeTranscriptionView() {
@@ -752,45 +976,51 @@ Wprowadź klucz OpenAI API:`);
         document.body.style.overflow = 'auto';
     }
     
-    deleteRecording(id) {
-        const recordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
-        const recording = recordings.find(r => r.id.toString() === id);
-        
-        if (!recording) {
-            this.status.textContent = 'Nie znaleziono nagrania';
-            return;
-        }
-        
-        const confirmMessage = `Czy na pewno chcesz usunąć nagranie?\n\n"${recording.name}"\nCzas trwania: ${Math.floor(recording.duration/60)}:${(recording.duration%60).toString().padStart(2, '0')}`;
-        
-        if (confirm(confirmMessage)) {
-            // Usuń nagranie z listy
-            const updatedRecordings = recordings.filter(r => r.id.toString() !== id);
-            localStorage.setItem('audioRecordings', JSON.stringify(updatedRecordings));
+    async deleteRecording(id) {
+        try {
+            const recordings = await this.db.getRecordings();
+            const recording = recordings.find(r => r.id.toString() === id);
             
-            // Zamknij widok transkrypcji
-            this.closeTranscriptionView();
+            if (!recording) {
+                this.status.textContent = 'Nie znaleziono nagrania';
+                return;
+            }
             
-            // Odśwież listę nagrań
-            this.loadRecordings();
+            const confirmMessage = `Czy na pewno chcesz usunąć nagranie?\n\n"${recording.name}"\nCzas trwania: ${Math.floor(recording.duration/60)}:${(recording.duration%60).toString().padStart(2, '0')}`;
             
-            this.status.textContent = 'Nagranie zostało usunięte';
-            setTimeout(() => {
-                this.status.textContent = 'Dotknij aby nagrać';
-            }, 2000);
+            if (confirm(confirmMessage)) {
+                // Usuń nagranie z bazy danych
+                await this.db.deleteRecording(id);
+                console.log(`🗑️ [DELETE] Nagranie ${id} usunięte z IndexedDB`);
+                
+                // Zamknij widok transkrypcji
+                this.closeTranscriptionView();
+                
+                // Odśwież listę nagrań
+                await this.loadRecordings();
+                
+                this.status.textContent = 'Nagranie zostało usunięte';
+                setTimeout(() => {
+                    this.status.textContent = 'Dotknij aby nagrać';
+                }, 2000);
+            }
+        } catch (error) {
+            console.error('❌ [DELETE] Błąd usuwania nagrania:', error);
+            this.status.textContent = 'Błąd usuwania nagrania';
         }
     }
     
-    downloadRecording(id) {
-        const recordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
-        const recording = recordings.find(r => r.id.toString() === id);
-        
-        if (!recording) {
-            this.status.textContent = 'Nie znaleziono nagrania';
-            return;
-        }
-        
+    async downloadRecording(id) {
         try {
+            const recordings = await this.db.getRecordings();
+            const recording = recordings.find(r => r.id.toString() === id);
+            
+            if (!recording) {
+                this.status.textContent = 'Nie znaleziono nagrania';
+                return;
+            }
+            
+            // Konwersja base64 z powrotem do blob
             // Konwersja base64 z powrotem do blob
             const byteCharacters = atob(recording.audio);
             const byteNumbers = new Array(byteCharacters.length);
@@ -826,7 +1056,7 @@ Wprowadź klucz OpenAI API:`);
             }, 2000);
             
         } catch (error) {
-            console.error('Błąd pobierania:', error);
+            console.error('❌ [DOWNLOAD] Błąd pobierania nagrania:', error);
             this.status.textContent = 'Błąd pobierania nagrania';
         }
     }
@@ -972,29 +1202,34 @@ Wprowadź klucz OpenAI API:`);
         }
     }
     
-    setRecordingTitle(title) {
+    async setRecordingTitle(title) {
         console.log(`💾 [TITLE] Zapisuję tytuł "${title}" dla nagrania ${this.currentRecordingId}`);
-        // Zapisz tytuł w localStorage dla aktualnego nagrania
-        const recordingTitles = JSON.parse(localStorage.getItem('recordingTitles') || '{}');
-        recordingTitles[this.currentRecordingId] = title;
-        localStorage.setItem('recordingTitles', JSON.stringify(recordingTitles));
-        console.log('💾 [TITLE] Tytuł zapisany w localStorage');
-        
-        // Natychmiast zaktualizuj interfejs
-        this.updateRecordingTitle();
+        try {
+            await this.db.saveTitle(this.currentRecordingId, title);
+            console.log('💾 [TITLE] Tytuł zapisany w IndexedDB');
+            
+            // Natychmiast zaktualizuj interfejs
+            this.updateRecordingTitle();
+        } catch (error) {
+            console.error('❌ [TITLE] Błąd zapisu tytułu:', error);
+        }
     }
     
-    getRecordingTitle(id) {
-        const recordingTitles = JSON.parse(localStorage.getItem('recordingTitles') || '{}');
-        const title = recordingTitles[id] || null;
-        console.log(`🔍 [TITLE] Pobieranie tytułu dla ${id}: "${title}"`);
-        return title;
+    async getRecordingTitle(id) {
+        try {
+            const title = await this.db.getTitle(id);
+            console.log(`🔍 [TITLE] Pobieranie tytułu dla ${id}: "${title}"`);
+            return title;
+        } catch (error) {
+            console.error(`❌ [TITLE] Błąd pobierania tytułu dla ${id}:`, error);
+            return null;
+        }
     }
     
-    updateRecordingTitle() {
+    async updateRecordingTitle() {
         if (!this.isRecording) return;
         
-        const currentTitle = this.getRecordingTitle(this.currentRecordingId);
+        const currentTitle = await this.getRecordingTitle(this.currentRecordingId);
         console.log(`🔄 [TITLE] Aktualizacja interfejsu - isGeneratingTitle: ${this.isGeneratingTitle}, currentTitle: "${currentTitle}"`);
         
         if (this.isGeneratingTitle) {
