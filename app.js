@@ -276,17 +276,34 @@ class AudioRecorder {
         // Sprawdź ostrzeżenie o kluczu API
         this.updateApiKeyWarning();
         
-        // Żądanie uprawnień do mikrofonu przy starcie
+        // Sprawdź dostępność MediaDevices API i żądaj uprawnień do mikrofonu
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            console.error('❌ [MIC] MediaDevices API nie jest dostępne');
+            this.status.textContent = 'Przeglądarka nie obsługuje nagrywania audio';
+            this.recordButton.disabled = true;
+            this.recordButton.style.opacity = '0.5';
+            this.recordButton.style.cursor = 'not-allowed';
+            return;
+        }
+
         try {
             await navigator.mediaDevices.getUserMedia({ audio: true });
+            console.log('✅ [MIC] Uprawnienia do mikrofonu uzyskane');
             this.status.textContent = 'Dotknij aby nagrać';
         } catch (error) {
+            console.error('❌ [MIC] Błąd uprawnień mikrofonu:', error);
             this.status.textContent = 'Brak dostępu do mikrofonu';
-            console.error('Błąd dostępu do mikrofonu:', error);
         }
     }
     
     async startRecording() {
+        // Sprawdź ponownie dostępność MediaDevices API
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            console.error('❌ [MIC] MediaDevices API nie jest dostępne podczas startRecording');
+            this.status.textContent = 'Przeglądarka nie obsługuje nagrywania audio';
+            return;
+        }
+
         try {
             // Żądanie dostępu do mikrofonu z wysoką jakością dla iPhone
             this.stream = await navigator.mediaDevices.getUserMedia({
