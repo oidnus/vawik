@@ -998,21 +998,299 @@ class AudioRecorder {
                 return;
             }
             
-            // Sprawdź czy jest ustawiony klucz API
-            const apiKey = this.getOpenAIKey();
-            if (!apiKey) {
-                this.showApiKeyMissingError();
-                return;
-            }
+            // Sprawdź tryb transkrypcji
+            const transcriptionMode = this.getTranscriptionMode();
+            console.log('🎤 [TRANSCRIBE] Używam trybu:', transcriptionMode);
             
             // Oznacz jako transkrybowane
             recording.transcribing = true;
             await this.db.saveRecording(recording);
             await this.loadRecordings();
             
-            this.status.textContent = 'Wysyłam do OpenAI Whisper...';
+            if (transcriptionMode === 'offline') {
+                await this.transcribeOffline(recording, id);
+            } else {
+                await this.transcribeOpenAI(recording, id);
+            }
             
-            // Transkrypcja Whisper
+        } catch (error) {
+            console.error('❌ [TRANSCRIBE] Ogólny błąd transkrypcji:', error);
+            
+            // Usuń flagę transkrypcji w przypadku błędu
+            const recordings = await this.db.getRecordings();
+            const recording = recordings.find(r => r.id.toString() === id);
+            if (recording) {
+                recording.transcribing = false;
+                await this.db.saveRecording(recording);
+                await this.loadRecordings();
+            }
+            
+            this.status.textContent = 'Błąd transkrypcji: ' + error.message;
+        }
+    }
+    
+    async transcribeOffline(recording, id) {
+        console.log('🌐 [OFFLINE] Rozpoczynam offline transkrypcję');
+        
+        try {
+            // Sprawdź czy Whisper.js jest dostępne
+            if (!window.transformersReady || !window.transformersPipeline) {
+                console.warn('⚠️ [OFFLINE] Whisper.js nie jest dostępny, używam fallback');
+                return await this.transcribeOfflineFallback(recording, id);
+            }
+            
+            // Informacje o modelu
+            const modelName = this.getOfflineModel();
+            const modelSizes = {
+                'Xenova/whisper-tiny': '39MB',
+                'Xenova/whisper-base': '74MB', 
+                'Xenova/whisper-small': '244MB',
+                'Xenova/whisper-medium': '769MB',
+                'Xenova/whisper-large-v3': '1550MB'
+            };
+            
+            const modelSize = modelSizes[modelName] || 'nieznany rozmiar';
+            this.status.textContent = `Pobieranie modelu ${modelName} (${modelSize}) z CDN...`;
+            
+            console.log('🤖 [OFFLINE] Ładuję model:', modelName, 'Rozmiar:', modelSize);
+            
+            // Konfiguruj env przed tworzeniem pipeline
+            if (window.transformersEnv) {
+                window.transformersEnv.allowRemoteModels = true;
+                window.transformersEnv.allowLocalModels = false;
+                window.transformersEnv.useBrowserCache = true;
+            }
+            
+            const transcriber = await window.transformersPipeline(
+                'automatic-speech-recognition',
+                modelName,
+                { 
+                    return_timestamps: true,
+                    chunk_length_s: 30,
+                    force_download: false  // Użyj cache jeśli dostępny
+                }
+            );
+            
+            console.log('✅ [OFFLINE] Model Whisper załadowany');
+            this.status.textContent = 'Transkrybowanie offline...';
+            
+            // Konwersja audio
+            const byteCharacters = atob(recording.audio);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const audioBlob = new Blob([byteArray], { type: recording.mimeType || 'audio/webm' });
+            
+            // Konwertuj do format obsługiwany przez Whisper
+            const audioUrl = URL.createObjectURL(audioBlob);
+            
+            try {
+                // Uruchom transkrypcję - uproszczona wersja
+                const result = await transcriber(audioUrl, {
+                    return_timestamps: true
+                });
+                
+                console.log('🎤 [OFFLINE] Wynik Whisper:', result);
+                
+                // Przetwórz wynik
+                let transcriptionText = '';
+                let segments = [];
+                
+                if (result.chunks && result.chunks.length > 0) {
+                    result.chunks.forEach((chunk, index) => {
+                        transcriptionText += chunk.text + ' ';
+                        segments.push({
+                            start: chunk.timestamp[0] || index * 5,
+                            end: chunk.timestamp[1] || (index + 1) * 5,
+                            text: chunk.text.trim()
+                        });
+                    });
+                } else if (result.text) {
+                    transcriptionText = result.text;
+                    segments = [{
+                        start: 0,
+                        end: 30,
+                        text: result.text.trim()
+                    }];
+                }
+                
+                URL.revokeObjectURL(audioUrl);
+                
+                // Zapisz wynik
+                recording.transcription = transcriptionText.trim() || 'Nie rozpoznano mowy';
+                recording.transcriptionSegments = segments;
+                recording.transcribing = false;
+                
+                await this.db.saveRecording(recording);
+                await this.loadRecordings();
+                
+                this.status.textContent = 'Transkrypcja offline ukończona!';
+                
+            } catch (whisperError) {
+                URL.revokeObjectURL(audioUrl);
+                throw whisperError;
+            }
+            
+        } catch (error) {
+            console.error('❌ [OFFLINE] Błąd Whisper:', error);
+            console.error('❌ [OFFLINE] Error details:', {
+                message: error.message,
+                stack: error.stack,
+                name: error.name
+            });
+            
+            // Sprawdź czy to błąd sieciowy vs błąd modelu
+            if (error.message && (
+                error.message.includes('fetch') || 
+                error.message.includes('network') ||
+                error.message.includes('404') ||
+                error.message.includes('Failed to load')
+            )) {
+                console.warn('⚠️ [OFFLINE] Błąd pobierania modelu z CDN, przechodzę na fallback');
+                this.status.textContent = 'Błąd pobierania modelu AI, używam Web Speech API...';
+            } else {
+                console.warn('⚠️ [OFFLINE] Błąd przetwarzania modelu, przechodzę na fallback');
+                this.status.textContent = 'Błąd transkrypcji AI, używam Web Speech API...';
+            }
+            
+            return await this.transcribeOfflineFallback(recording, id);
+        }
+    }
+    
+    async transcribeOfflineFallback(recording, id) {
+        console.log('🔄 [FALLBACK] Używam Web Speech API jako fallback');
+        this.status.textContent = 'Transkrypcja offline (Web Speech API)...';
+        
+        try {
+            // Sprawdź wsparcie dla Web Speech API
+            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+                // Ostateczny fallback - prosta transkrypcja
+                recording.transcription = 'Offline transkrypcja niedostępna w tej przeglądarce. Przełącz na tryb OpenAI w ustawieniach.';
+                recording.transcriptionSegments = [{
+                    start: 0,
+                    end: 30,
+                    text: 'Offline transkrypcja niedostępna w tej przeglądarce.'
+                }];
+                recording.transcribing = false;
+                
+                await this.db.saveRecording(recording);
+                await this.loadRecordings();
+                
+                this.status.textContent = 'Offline transkrypcja niedostępna';
+                return;
+            }
+            
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            const recognition = new SpeechRecognition();
+            
+            recognition.continuous = true;
+            recognition.interimResults = false;
+            recognition.lang = 'pl-PL';
+            
+            // Konwertuj audio
+            const byteCharacters = atob(recording.audio);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const audioBlob = new Blob([byteArray], { type: recording.mimeType || 'audio/webm' });
+            
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio(audioUrl);
+            
+            let transcriptionText = '';
+            let segmentCount = 0;
+            
+            return new Promise((resolve) => {
+                const timeout = setTimeout(() => {
+                    recognition.stop();
+                    console.warn('⚠️ [FALLBACK] Timeout - kończę transkrypcję');
+                }, 30000); // 30s timeout
+                
+                recognition.onresult = (event) => {
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        if (event.results[i].isFinal) {
+                            transcriptionText += event.results[i][0].transcript + ' ';
+                            segmentCount++;
+                        }
+                    }
+                };
+                
+                recognition.onend = async () => {
+                    clearTimeout(timeout);
+                    URL.revokeObjectURL(audioUrl);
+                    
+                    const finalText = transcriptionText.trim() || 'Nie udało się rozpoznać mowy offline. Spróbuj trybu OpenAI.';
+                    
+                    recording.transcription = finalText;
+                    recording.transcriptionSegments = [{
+                        start: 0,
+                        end: Math.floor(audio.duration || 30),
+                        text: finalText
+                    }];
+                    recording.transcribing = false;
+                    
+                    await this.db.saveRecording(recording);
+                    await this.loadRecordings();
+                    
+                    this.status.textContent = 'Transkrypcja offline zakończona';
+                    resolve();
+                };
+                
+                recognition.onerror = () => {
+                    clearTimeout(timeout);
+                    recognition.onend();
+                };
+                
+                // Rozpocznij rozpoznawanie
+                audio.play().then(() => {
+                    recognition.start();
+                }).catch(() => {
+                    // Jeśli nie można odtworzyć, uruchom recognition bez audio
+                    recognition.start();
+                });
+            });
+            
+        } catch (error) {
+            console.error('❌ [FALLBACK] Błąd fallback:', error);
+            
+            // Ostateczny fallback
+            recording.transcription = 'Transkrypcja offline nie powiodła się. Użyj trybu OpenAI w ustawieniach dla najlepszych rezultatów.';
+            recording.transcriptionSegments = [{
+                start: 0,
+                end: 30,
+                text: 'Transkrypcja offline niedostępna'
+            }];
+            recording.transcribing = false;
+            
+            await this.db.saveRecording(recording);
+            await this.loadRecordings();
+            
+            this.status.textContent = 'Offline transkrypcja niedostępna';
+        }
+    }
+    
+    async transcribeOpenAI(recording, id) {
+        console.log('🤖 [OPENAI] Rozpoczynam OpenAI transkrypcję');
+        
+        // Sprawdź czy jest ustawiony klucz API
+        const apiKey = this.getOpenAIKey();
+        if (!apiKey) {
+            this.showApiKeyMissingError();
+            
+            // Usuń flagę transkrypcji
+            recording.transcribing = false;
+            await this.db.saveRecording(recording);
+            await this.loadRecordings();
+            return;
+        }
+        
+        this.status.textContent = 'Wysyłam do OpenAI Whisper...';
+        
+        try {
             // Konwertuj base64 z powrotem do blob
             const byteCharacters = atob(recording.audio);
             const byteNumbers = new Array(byteCharacters.length);
@@ -1051,20 +1329,20 @@ class AudioRecorder {
             recording.transcriptionSegments = transcriptionData.segments || [];
             console.log('🎤 [WHISPER] Segmenty:', recording.transcriptionSegments.length);
             recording.transcribing = false;
+            
             await this.db.saveRecording(recording);
             await this.loadRecordings();
             
-            this.status.textContent = 'Transkrypcja ukończona!';
+            this.status.textContent = 'Transkrypcja OpenAI ukończona!';
             
         } catch (error) {
-            console.error('Błąd transkrypcji:', error);
+            console.error('❌ [OPENAI] Błąd OpenAI transkrypcji:', error);
             
-            // Usuń flagę transkrypcji w przypadku błędu
             recording.transcribing = false;
             await this.db.saveRecording(recording);
             await this.loadRecordings();
             
-            let errorMessage = 'Błąd transkrypcji';
+            let errorMessage = 'Błąd transkrypcji OpenAI';
             if (error.message.includes('401')) {
                 errorMessage = 'Nieprawidłowy klucz OpenAI API';
             } else if (error.message.includes('429')) {
@@ -1073,7 +1351,7 @@ class AudioRecorder {
                 errorMessage = 'Brak połączenia internetowego';
             }
             
-            this.status.textContent = errorMessage;
+            throw new Error(errorMessage);
         }
     }
     
@@ -1228,44 +1506,39 @@ Wprowadź klucz OpenAI API:`);
             await this.deleteRecording(id);
         };
         
-        // Przycisk transkrypcji - pokaż tylko jeśli jest klucz OpenAI API
-        const hasApiKey = this.getOpenAIKey();
-        if (hasApiKey) {
-            transcribeBtn.classList.remove('hidden');
-            
-            if (recording.transcribing) {
-                transcribeIcon.textContent = '⏳';
-                transcribeText.textContent = 'Transkrybowanie...';
-                transcribeBtn.disabled = true;
-                transcribeBtn.className = 'py-3 px-6 rounded-lg bg-gray-500/20 border border-gray-500/30 text-gray-400 font-medium cursor-not-allowed transition-all duration-300 flex items-center justify-center gap-2';
-            } else if (recording.transcription) {
-                transcribeIcon.textContent = '🔄';
-                transcribeText.textContent = 'Transkrybuj ponownie';
-                transcribeBtn.disabled = false;
-                transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
-                transcribeBtn.onclick = async () => {
-                    // Usuń istniejącą transkrypcję i rozpocznij nową
-                    const updatedRecordings = await this.db.getRecordings();
-                    const currentRecording = updatedRecordings.find(r => r.id.toString() === id);
-                    if (currentRecording) {
-                        delete currentRecording.transcription;
-                        await this.db.saveRecording(currentRecording);
-                    }
-                    await this.transcribeRecording(id);
-                    await this.openTranscriptionView(id); // Odśwież widok
-                };
-            } else {
-                transcribeIcon.textContent = '🎤';
-                transcribeText.textContent = 'Transkrybuj';
-                transcribeBtn.disabled = false;
-                transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
-                transcribeBtn.onclick = async () => {
-                    await this.transcribeRecording(id);
-                    await this.openTranscriptionView(id); // Odśwież widok
-                };
-            }
+        // Przycisk transkrypcji - zawsze widoczny (offline + OpenAI)
+        transcribeBtn.classList.remove('hidden');
+        
+        if (recording.transcribing) {
+            transcribeIcon.textContent = '⏳';
+            transcribeText.textContent = 'Transkrybowanie...';
+            transcribeBtn.disabled = true;
+            transcribeBtn.className = 'py-3 px-6 rounded-lg bg-gray-500/20 border border-gray-500/30 text-gray-400 font-medium cursor-not-allowed transition-all duration-300 flex items-center justify-center gap-2';
+        } else if (recording.transcription) {
+            transcribeIcon.textContent = '🔄';
+            transcribeText.textContent = 'Transkrybuj ponownie';
+            transcribeBtn.disabled = false;
+            transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
+            transcribeBtn.onclick = async () => {
+                // Usuń istniejącą transkrypcję i rozpocznij nową
+                const updatedRecordings = await this.db.getRecordings();
+                const currentRecording = updatedRecordings.find(r => r.id.toString() === id);
+                if (currentRecording) {
+                    delete currentRecording.transcription;
+                    await this.db.saveRecording(currentRecording);
+                }
+                await this.transcribeRecording(id);
+                await this.openTranscriptionView(id); // Odśwież widok
+            };
         } else {
-            transcribeBtn.classList.add('hidden');
+            transcribeIcon.textContent = '🎤';
+            transcribeText.textContent = 'Transkrybuj';
+            transcribeBtn.disabled = false;
+            transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
+            transcribeBtn.onclick = async () => {
+                await this.transcribeRecording(id);
+                await this.openTranscriptionView(id); // Odśwież widok
+            };
         }
         
         // Pokaż pełnoekranowy widok
@@ -1576,6 +1849,7 @@ Wprowadź klucz OpenAI API:`);
         document.body.style.overflow = 'hidden';
         
         this.loadApiKeySettings();
+        this.loadTranscriptionModeSettings();
     }
     
     closeSettingsView() {
@@ -1615,11 +1889,20 @@ Wprowadź klucz OpenAI API:`);
     updateApiKeyWarning() {
         const apiKeyWarning = document.getElementById('apiKeyWarning');
         const hasApiKey = localStorage.getItem('openai_api_key');
+        const transcriptionMode = this.getTranscriptionMode();
         
-        if (hasApiKey) {
+        if (hasApiKey && transcriptionMode === 'openai') {
             apiKeyWarning.classList.add('hidden');
         } else {
             apiKeyWarning.classList.remove('hidden');
+            
+            // Zaktualizuj tekst w zależności od sytuacji
+            const messageSpan = apiKeyWarning.querySelector('span:last-child');
+            if (transcriptionMode === 'offline') {
+                messageSpan.textContent = 'Używasz trybu offline. Dodaj klucz OpenAI dla najwyższej jakości transkrypcji.';
+            } else if (!hasApiKey) {
+                messageSpan.textContent = 'Wybrano tryb OpenAI, ale brakuje klucza API. Przełącz na offline lub dodaj klucz.';
+            }
         }
     }
     
@@ -1785,14 +2068,17 @@ Wprowadź klucz OpenAI API:`);
     
     loadAiModelsSettings() {
         const transcriptionModelInput = document.getElementById('transcriptionModelInput');
+        const offlineModelInput = document.getElementById('offlineModelInput');
         const titleModelInput = document.getElementById('titleModelInput');
         const statusDiv = document.getElementById('aiModelsStatus');
         
         // Pobierz ustawienia z localStorage lub użyj domyślnych wartości
         const transcriptionModel = localStorage.getItem('transcription_model') || 'whisper-1';
+        const offlineModel = localStorage.getItem('offline_model') || 'Xenova/whisper-small';
         const titleModel = localStorage.getItem('title_model') || 'gpt-4.1-nano';
         
         transcriptionModelInput.value = transcriptionModel;
+        offlineModelInput.value = offlineModel;
         titleModelInput.value = titleModel;
         
         statusDiv.innerHTML = '<span class="text-gray-400">🤖 Modele załadowane</span>';
@@ -1800,10 +2086,12 @@ Wprowadź klucz OpenAI API:`);
     
     saveAiModels() {
         const transcriptionModelInput = document.getElementById('transcriptionModelInput');
+        const offlineModelInput = document.getElementById('offlineModelInput');
         const titleModelInput = document.getElementById('titleModelInput');
         const statusDiv = document.getElementById('aiModelsStatus');
         
         const transcriptionModel = transcriptionModelInput.value.trim();
+        const offlineModel = offlineModelInput.value;
         const titleModel = titleModelInput.value.trim();
         
         // Walidacja
@@ -1819,6 +2107,7 @@ Wprowadź klucz OpenAI API:`);
         
         // Zapisz ustawienia
         localStorage.setItem('transcription_model', transcriptionModel);
+        localStorage.setItem('offline_model', offlineModel);
         localStorage.setItem('title_model', titleModel);
         
         statusDiv.innerHTML = '<span class="text-green-400">✅ Modele AI zapisane</span>';
@@ -1826,16 +2115,19 @@ Wprowadź klucz OpenAI API:`);
     
     resetAiModels() {
         const transcriptionModelInput = document.getElementById('transcriptionModelInput');
+        const offlineModelInput = document.getElementById('offlineModelInput');
         const titleModelInput = document.getElementById('titleModelInput');
         const statusDiv = document.getElementById('aiModelsStatus');
         
         if (confirm('Czy na pewno chcesz przywrócić domyślne modele AI?')) {
             // Ustaw domyślne wartości
             transcriptionModelInput.value = 'whisper-1';
+            offlineModelInput.value = 'Xenova/whisper-small';
             titleModelInput.value = 'gpt-4.1-nano';
             
             // Usuń z localStorage
             localStorage.removeItem('transcription_model');
+            localStorage.removeItem('offline_model');
             localStorage.removeItem('title_model');
             
             statusDiv.innerHTML = '<span class="text-gray-400">🔄 Przywrócono domyślne modele</span>';
@@ -1847,8 +2139,59 @@ Wprowadź klucz OpenAI API:`);
         return localStorage.getItem('transcription_model') || 'whisper-1';
     }
     
+    getOfflineModel() {
+        return localStorage.getItem('offline_model') || 'Xenova/whisper-small';
+    }
+    
     getTitleModel() {
         return localStorage.getItem('title_model') || 'gpt-4.1-nano';
+    }
+    
+    // Funkcje trybu transkrypcji
+    getTranscriptionMode() {
+        return localStorage.getItem('transcription_mode') || 'offline';
+    }
+    
+    saveTranscriptionMode() {
+        const offlineRadio = document.querySelector('input[name="transcriptionMode"][value="offline"]');
+        const openaiRadio = document.querySelector('input[name="transcriptionMode"][value="openai"]');
+        const statusDiv = document.getElementById('transcriptionModeStatus');
+        
+        let selectedMode = 'offline'; // domyślny
+        
+        if (openaiRadio && openaiRadio.checked) {
+            selectedMode = 'openai';
+        } else if (offlineRadio && offlineRadio.checked) {
+            selectedMode = 'offline';
+        }
+        
+        localStorage.setItem('transcription_mode', selectedMode);
+        
+        if (selectedMode === 'offline') {
+            statusDiv.innerHTML = '<span class="text-emerald-400">✅ Używasz trybu offline (Web Speech API)</span>';
+        } else {
+            statusDiv.innerHTML = '<span class="text-blue-400">🤖 Używasz trybu OpenAI Whisper</span>';
+        }
+        
+        console.log('💾 [SETTINGS] Zapisano tryb transkrypcji:', selectedMode);
+    }
+    
+    loadTranscriptionModeSettings() {
+        const currentMode = this.getTranscriptionMode();
+        const statusDiv = document.getElementById('transcriptionModeStatus');
+        
+        // Ustaw radio button
+        const radioToCheck = document.querySelector(`input[name="transcriptionMode"][value="${currentMode}"]`);
+        if (radioToCheck) {
+            radioToCheck.checked = true;
+        }
+        
+        // Pokaż status
+        if (currentMode === 'offline') {
+            statusDiv.innerHTML = '<span class="text-emerald-400">✅ Używasz trybu offline (Web Speech API)</span>';
+        } else {
+            statusDiv.innerHTML = '<span class="text-blue-400">🤖 Używasz trybu OpenAI Whisper</span>';
+        }
     }
     
     setupTitleEditing(recordingId, currentTitle) {

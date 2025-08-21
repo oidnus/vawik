@@ -6,10 +6,35 @@
     <meta name="theme-color" content="#2196F3">
     <title>Nagrywarka Audio</title>
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" href="icon-192x192.png">
+    <link rel="apple-touch-icon" href="https://cdn.jsdelivr.net/npm/@tabler/icons@2.40.0/icons/microphone.svg">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        // Import Whisper.js dla offline transkrypcji
+        try {
+            const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.6.0');
+            
+            // Konfiguracja dla Whisper.js - wymuś użycie CDN
+            env.allowRemoteModels = true;
+            env.allowLocalModels = false;  // Wyłącz lokalne modele
+            env.useBrowserCache = true;
+            
+            // Ustawienia dla poprawnego pobierania z CDN
+            env.remoteHost = 'https://huggingface.co/';
+            env.remotePathTemplate = '{model}/resolve/main/';
+            
+            // Udostępnij globalne referencje
+            window.transformersPipeline = pipeline;
+            window.transformersEnv = env;
+            window.transformersReady = true;
+            
+            console.log('✅ Whisper.js załadowany pomyślnie z CDN');
+        } catch (error) {
+            console.error('❌ Błąd ładowania Whisper.js:', error);
+            window.transformersReady = false;
+        }
+    </script>
     <script>
         tailwind.config = {
             theme: {
@@ -88,14 +113,14 @@
     </div>
 
     <!-- API Key Warning -->
-    <div class="hidden mx-5 mb-5 p-4 bg-amber-500/20 border border-amber-500/30 rounded-lg text-amber-300 text-sm" id="apiKeyWarning">
+    <div class="hidden mx-5 mb-5 p-4 bg-blue-500/20 border border-blue-500/30 rounded-lg text-blue-300 text-sm" id="apiKeyWarning">
         <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
-                <span class="text-lg">⚠️</span>
-                <span>Brakuje klucza OpenAI API. Transkrypcja i generowanie tytułów nie będą działać.</span>
+                <span class="text-lg">💡</span>
+                <span>Używasz trybu offline. Dodaj klucz OpenAI dla najwyższej jakości transkrypcji.</span>
             </div>
-            <button class="px-3 py-1 bg-amber-500/30 border border-amber-500/50 rounded-md text-xs hover:bg-amber-500/40 transition-all duration-300" onclick="recorder.openSettingsView()">
-                Dodaj klucz
+            <button class="px-3 py-1 bg-blue-500/30 border border-blue-500/50 rounded-md text-xs hover:bg-blue-500/40 transition-all duration-300" onclick="recorder.openSettingsView()">
+                Ustawienia
             </button>
         </div>
     </div>
@@ -146,7 +171,7 @@
 
     <!-- Footer -->
     <footer class="text-center py-4 px-5 bg-navigator-dark/50 border-t border-navigator-purple/10 text-gray-500 text-sm">
-        Vawik v0.8.0
+        Vawik v0.10.0
     </footer>
 
     <!-- Pełnoekranowy widok transkrypcji -->
@@ -276,17 +301,72 @@
                 <!-- Status klucza API będzie wyświetlany tutaj -->
             </div>
             
+            <!-- Tryb transkrypcji -->
+            <div class="mt-6">
+                <h4 class="text-lg font-semibold text-gray-200 mb-3">Tryb transkrypcji</h4>
+                
+                <div class="mb-4">
+                    <div class="bg-navigator-purple/10 rounded-lg border-l-4 border-navigator-purple p-3 mb-3">
+                        <p class="text-xs text-gray-400">Wybierz sposób transkrypcji nagrań audio</p>
+                    </div>
+                    
+                    <div class="space-y-3">
+                        <label class="flex items-center p-3 bg-gray-800/50 border border-gray-600 rounded-lg cursor-pointer hover:bg-gray-700/50 transition-all duration-300">
+                            <input type="radio" name="transcriptionMode" value="offline" class="mr-3 text-navigator-purple focus:ring-navigator-purple" checked>
+                            <div class="flex-1">
+                                <div class="font-medium text-gray-200">🌐 Offline (Domyślny)</div>
+                                <div class="text-xs text-gray-400 mt-1">Używa Whisper.js - prawdziwa AI, bezpłatnie, prywatnie, bez wysyłania danych</div>
+                            </div>
+                        </label>
+                        
+                        <label class="flex items-center p-3 bg-gray-800/50 border border-gray-600 rounded-lg cursor-pointer hover:bg-gray-700/50 transition-all duration-300">
+                            <input type="radio" name="transcriptionMode" value="openai" class="mr-3 text-navigator-purple focus:ring-navigator-purple">
+                            <div class="flex-1">
+                                <div class="font-medium text-gray-200">🤖 OpenAI Whisper</div>
+                                <div class="text-xs text-gray-400 mt-1">Wysyła audio do OpenAI - najwyższa jakość, wymaga klucza API</div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="flex gap-3">
+                    <button class="flex-1 px-6 py-3 bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium rounded-lg hover:bg-navigator-purple/30 hover:border-navigator-purple/50 transition-all duration-300" onclick="recorder.saveTranscriptionMode()">
+                        Zapisz tryb
+                    </button>
+                </div>
+                
+                <div class="mt-3 text-sm" id="transcriptionModeStatus">
+                    <!-- Status trybu transkrypcji -->
+                </div>
+            </div>
+            
             <!-- Modele AI -->
             <div class="mt-6">
                 <h4 class="text-lg font-semibold text-gray-200 mb-3">Modele AI</h4>
                 
-                <!-- Model do transkrypcji -->
+                <!-- Model do transkrypcji online -->
                 <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-300 mb-2">Model do transkrypcji</label>
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Model do transkrypcji (OpenAI)</label>
                     <div class="bg-navigator-purple/10 rounded-lg border-l-4 border-navigator-purple p-3 mb-3">
                         <p class="text-xs text-gray-400">Model OpenAI Whisper używany do transkrypcji audio</p>
                     </div>
                     <input type="text" id="transcriptionModelInput" placeholder="whisper-1" class="w-full px-4 py-3 bg-gray-800/50 border border-gray-600 rounded-lg text-gray-100 placeholder-gray-400 focus:outline-none focus:border-navigator-purple focus:ring-2 focus:ring-navigator-purple/20" />
+                </div>
+
+                <!-- Model do transkrypcji offline -->
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Model do transkrypcji (Offline)</label>
+                    <div class="bg-green-600/10 rounded-lg border-l-4 border-green-600 p-3 mb-3">
+                        <p class="text-xs text-gray-400">Model pobierany z CDN i zapisywany w cache przeglądarki</p>
+                        <p class="text-xs text-yellow-400 mt-1">⚠️ Pierwsze użycie wymaga pobrania całego modelu (może potrwać)</p>
+                    </div>
+                    <select id="offlineModelInput" class="w-full px-4 py-3 bg-gray-800/50 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-navigator-purple focus:ring-2 focus:ring-navigator-purple/20">
+                        <option value="Xenova/whisper-tiny">whisper-tiny (39MB - najszybszy)</option>
+                        <option value="Xenova/whisper-base">whisper-base (74MB - dobra jakość)</option>
+                        <option value="Xenova/whisper-small" selected>whisper-small (244MB - wysoka jakość, domyślny)</option>
+                        <option value="Xenova/whisper-medium">whisper-medium (769MB - bardzo wysoka jakość)</option>
+                        <option value="Xenova/whisper-large-v3">whisper-large-v3 (1550MB - najlepsza jakość)</option>
+                    </select>
                 </div>
                 
                 <!-- Model do tytułów -->
