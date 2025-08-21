@@ -273,6 +273,10 @@ class AudioRecorder {
         
         await this.loadRecordings();
         
+        // Inicjalizuj odtwarzacz audio
+        this.initAudioPlayer();
+        console.log('✅ [INIT] Odtwarzacz audio zainicjalizowany');
+        
         // Sprawdź ostrzeżenie o kluczu API
         this.updateApiKeyWarning();
         
@@ -571,34 +575,256 @@ class AudioRecorder {
         }
     }
     
-    playRecording(id) {
-        const recordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
-        const recording = recordings.find(r => r.id.toString() === id);
+    // Klasa odtwarzacza audio
+    initAudioPlayer() {
+        this.audioPlayer = {
+            audio: null,
+            audioUrl: null,
+            isPlaying: false,
+            currentRecordingId: null,
+            
+            // Elementy DOM
+            playPauseBtn: document.getElementById('playPauseBtn'),
+            stopBtn: document.getElementById('stopBtn'),
+            rewind10Btn: document.getElementById('rewind10Btn'),
+            forward10Btn: document.getElementById('forward10Btn'),
+            audioProgress: document.getElementById('audioProgress'),
+            currentTime: document.getElementById('currentTime'),
+            
+            // Inicjalizacja event listenerów
+            init: () => {
+                this.audioPlayer.playPauseBtn.onclick = () => this.audioPlayer.togglePlayPause();
+                this.audioPlayer.stopBtn.onclick = () => this.audioPlayer.stop();
+                this.audioPlayer.rewind10Btn.onclick = () => this.audioPlayer.skip(-10);
+                this.audioPlayer.forward10Btn.onclick = () => this.audioPlayer.skip(10);
+                
+                // Debounce dla suwaka - tylko gdy użytkownik skończy przeciągać
+                this.audioPlayer.audioProgress.oninput = () => this.audioPlayer.seek();
+                this.audioPlayer.audioProgress.onchange = () => this.audioPlayer.seek();
+            },
+            
+            // Ładowanie nagrania
+            loadRecording: async (id) => {
+                console.log('🎵 [PLAYER] Ładowanie nagrania ID:', id);
+                
+                try {
+                    const recordings = await recorder.db.getRecordings();
+                    const recording = recordings.find(r => r.id.toString() === id.toString());
+                    
+                    if (!recording) {
+                        console.error('❌ [PLAYER] Nie znaleziono nagrania o ID:', id);
+                        return false;
+                    }
+                    
+                    // Usuń poprzednie audio jeśli istnieje
+                    this.audioPlayer.cleanup();
+                    
+                    // Konwersja base64 do blob
+                    const byteCharacters = atob(recording.audio);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const audioBlob = new Blob([byteArray], { type: recording.mimeType || 'audio/webm' });
+                    
+                    this.audioPlayer.audioUrl = URL.createObjectURL(audioBlob);
+                    this.audioPlayer.audio = new Audio(this.audioPlayer.audioUrl);
+                    this.audioPlayer.currentRecordingId = id;
+                    
+                    // Event listenery
+                    this.audioPlayer.audio.addEventListener('loadstart', () => {
+                        console.log('🎵 [PLAYER] Ładowanie audio...');
+                    });
+                    
+                    this.audioPlayer.audio.addEventListener('loadedmetadata', () => {
+                        console.log('🎵 [PLAYER] Metadane załadowane');
+                    });
+                    
+                    this.audioPlayer.audio.addEventListener('timeupdate', () => {
+                        this.audioPlayer.updateProgress();
+                    });
+                    
+                    this.audioPlayer.audio.addEventListener('ended', () => {
+                        this.audioPlayer.onEnded();
+                    });
+                    
+                    this.audioPlayer.audio.addEventListener('error', (error) => {
+                        console.error('❌ [PLAYER] Błąd audio:', error);
+                        console.error('❌ [PLAYER] Błąd elementu audio');
+                    });
+                    
+                    return true;
+                    
+                } catch (error) {
+                    console.error('❌ [PLAYER] Błąd ładowania:', error);
+                    console.error('❌ [PLAYER] Błąd ładowania audio');
+                    return false;
+                }
+            },
+            
+            // Toggle play/pause
+            togglePlayPause: () => {
+                if (!this.audioPlayer.audio) return;
+                
+                if (this.audioPlayer.isPlaying) {
+                    this.audioPlayer.pause();
+                } else {
+                    this.audioPlayer.play();
+                }
+            },
+            
+            // Play
+            play: () => {
+                if (!this.audioPlayer.audio) return;
+                
+                this.audioPlayer.audio.play().then(() => {
+                    this.audioPlayer.isPlaying = true;
+                    this.audioPlayer.playPauseBtn.textContent = '⏸️';
+                    console.log('🎵 [PLAYER] Rozpoczęto odtwarzanie');
+                }).catch(error => {
+                    console.error('❌ [PLAYER] Błąd odtwarzania:', error);
+                    console.error('❌ [PLAYER] Błąd odtwarzania');
+                });
+            },
+            
+            // Pause
+            pause: () => {
+                if (!this.audioPlayer.audio) return;
+                
+                this.audioPlayer.audio.pause();
+                this.audioPlayer.isPlaying = false;
+                this.audioPlayer.playPauseBtn.textContent = '▶️';
+                console.log('⏸️ [PLAYER] Wstrzymano odtwarzanie');
+            },
+            
+            // Stop
+            stop: () => {
+                if (!this.audioPlayer.audio) return;
+                
+                this.audioPlayer.audio.pause();
+                this.audioPlayer.audio.currentTime = 0;
+                this.audioPlayer.isPlaying = false;
+                this.audioPlayer.playPauseBtn.textContent = '▶️';
+                console.log('⏹️ [PLAYER] Zatrzymano odtwarzanie');
+                this.audioPlayer.updateProgress();
+            },
+            
+            // Skip (seconds)
+            skip: (seconds) => {
+                if (!this.audioPlayer.audio) return;
+                
+                const duration = this.audioPlayer.audio.duration;
+                const currentTime = this.audioPlayer.audio.currentTime;
+                
+                if (!isFinite(duration) || isNaN(duration) || duration <= 0) return;
+                if (!isFinite(currentTime) || isNaN(currentTime)) return;
+                
+                const newTime = Math.max(0, Math.min(duration, currentTime + seconds));
+                if (isFinite(newTime) && !isNaN(newTime)) {
+                    this.audioPlayer.audio.currentTime = newTime;
+                    console.log('🎵 [PLAYER] Skip do:', newTime, 's');
+                }
+            },
+            
+            // Seek to position
+            seek: () => {
+                if (!this.audioPlayer.audio) return;
+                
+                const duration = this.audioPlayer.audio.duration;
+                if (!duration || !isFinite(duration) || isNaN(duration)) {
+                    console.warn('🎵 [PLAYER] Seek: duration nie jest dostępna lub nieprawidłowa:', duration);
+                    return;
+                }
+                
+                const progressValue = parseFloat(this.audioPlayer.audioProgress.value);
+                if (!isFinite(progressValue) || isNaN(progressValue)) {
+                    console.warn('🎵 [PLAYER] Seek: nieprawidłowa wartość suwaka:', progressValue);
+                    return;
+                }
+                
+                const seekTime = (progressValue / 100) * duration;
+                if (isFinite(seekTime) && !isNaN(seekTime)) {
+                    this.audioPlayer.audio.currentTime = seekTime;
+                    console.log('🎵 [PLAYER] Seek do:', seekTime, 's');
+                } else {
+                    console.warn('🎵 [PLAYER] Seek: obliczony czas nie jest prawidłowy:', seekTime);
+                }
+            },
+            
+            // Update progress
+            updateProgress: () => {
+                if (!this.audioPlayer.audio) return;
+                
+                const duration = this.audioPlayer.audio.duration;
+                const currentTime = this.audioPlayer.audio.currentTime;
+                
+                if (!duration || !isFinite(duration) || isNaN(duration)) return;
+                if (!isFinite(currentTime) || isNaN(currentTime)) return;
+                
+                const progress = (currentTime / duration) * 100;
+                if (!isFinite(progress) || isNaN(progress)) return;
+                
+                const clampedProgress = Math.max(0, Math.min(100, progress));
+                this.audioPlayer.audioProgress.value = clampedProgress;
+                this.audioPlayer.audioProgress.style.background = 
+                    `linear-gradient(to right, #A855F7 ${clampedProgress}%, #374151 ${clampedProgress}%)`;
+                
+                this.audioPlayer.currentTime.textContent = this.audioPlayer.formatTime(currentTime);
+            },
+            
+            
+            // Format time (mm:ss)
+            formatTime: (seconds) => {
+                if (!isFinite(seconds) || isNaN(seconds) || seconds < 0) {
+                    return '00:00';
+                }
+                
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.floor(seconds % 60);
+                return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            },
+            
+            // On ended
+            onEnded: () => {
+                this.audioPlayer.isPlaying = false;
+                this.audioPlayer.playPauseBtn.textContent = '▶️';
+                console.log('🏁 [PLAYER] Zakończono odtwarzanie');
+                this.audioPlayer.audioProgress.value = 0;
+                this.audioPlayer.audioProgress.style.background = 
+                    'linear-gradient(to right, #A855F7 0%, #374151 0%)';
+                this.audioPlayer.currentTime.textContent = '00:00';
+            },
+            
+            // Cleanup
+            cleanup: () => {
+                if (this.audioPlayer.audio) {
+                    this.audioPlayer.audio.pause();
+                    this.audioPlayer.audio = null;
+                }
+                if (this.audioPlayer.audioUrl) {
+                    URL.revokeObjectURL(this.audioPlayer.audioUrl);
+                    this.audioPlayer.audioUrl = null;
+                }
+                this.audioPlayer.isPlaying = false;
+                this.audioPlayer.currentRecordingId = null;
+                this.audioPlayer.playPauseBtn.textContent = '▶️';
+                console.log('✅ [PLAYER] Odtwarzacz gotowy');
+                this.audioPlayer.audioProgress.value = 0;
+                this.audioPlayer.audioProgress.style.background = 
+                    'linear-gradient(to right, #A855F7 0%, #374151 0%)';
+                this.audioPlayer.currentTime.textContent = '00:00';
+            }
+        };
         
-        if (!recording) return;
-        
-        // Konwersja base64 z powrotem do blob
-        const byteCharacters = atob(recording.audio);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-            byteNumbers[i] = byteCharacters.charCodeAt(i);
-        }
-        const byteArray = new Uint8Array(byteNumbers);
-        const audioBlob = new Blob([byteArray], { type: recording.mimeType });
-        
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio(audioUrl);
-        
-        audio.play().catch(error => {
-            console.error('Błąd odtwarzania:', error);
-            this.status.textContent = 'Błąd odtwarzania nagrania';
-        });
-        
-        audio.addEventListener('ended', () => {
-            URL.revokeObjectURL(audioUrl);
-        });
-        
-        this.status.textContent = 'Odtwarzanie nagrania...';
+        // Inicjalizuj event listenery
+        this.audioPlayer.init();
+    }
+    
+    // Główna funkcja ładowania nagrania do odtwarzacza
+    async playRecording(id) {
+        console.log('🎵 [PLAY] Ładowanie nagrania do odtwarzacza:', id);
+        await this.audioPlayer.loadRecording(id);
     }
     
     startBackupTimer() {
@@ -796,12 +1022,13 @@ class AudioRecorder {
             const byteArray = new Uint8Array(byteNumbers);
             const audioBlob = new Blob([byteArray], { type: recording.mimeType });
             
-            // Przygotuj FormData dla OpenAI API
+            // Przygotuj FormData dla OpenAI API z timestamps
             const formData = new FormData();
             formData.append('file', audioBlob, `recording_${id}.webm`);
             formData.append('model', this.getTranscriptionModel());
             formData.append('language', 'pl');
-            formData.append('response_format', 'text');
+            formData.append('response_format', 'verbose_json');
+            formData.append('timestamp_granularities[]', 'segment');
             
             // Wyślij do OpenAI Whisper API
             const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
@@ -816,10 +1043,13 @@ class AudioRecorder {
                 throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
             }
             
-            const transcriptionText = await response.text();
+            const transcriptionData = await response.json();
+            console.log('🎤 [WHISPER] Odpowiedź API:', transcriptionData);
             
-            // Zapisz transkrypcję
-            recording.transcription = transcriptionText.trim();
+            // Zapisz transkrypcję z timestamps
+            recording.transcription = transcriptionData.text.trim();
+            recording.transcriptionSegments = transcriptionData.segments || [];
+            console.log('🎤 [WHISPER] Segmenty:', recording.transcriptionSegments.length);
             recording.transcribing = false;
             await this.db.saveRecording(recording);
             await this.loadRecordings();
@@ -953,14 +1183,14 @@ Wprowadź klucz OpenAI API:`);
             <strong>Status:</strong> ${recording.corrupted ? 'Odzyskane' : 'Kompletne'}
         `;
         
-        document.getElementById('transcriptionContent').textContent = recording.transcription || 'Brak transkrypcji. Kliknij przycisk "Transkrybuj" poniżej aby rozpocząć transkrypcję tego nagrania.';
+        // Wyświetl transkrypcję z timestamps
+        this.displayTranscriptionWithTimestamps(recording);
         
         // Skonfiguruj edycję tytułu
         console.log('🔧 [TITLE] Przekazuję ID do setupTitleEditing:', id, 'typ:', typeof id);
         this.setupTitleEditing(id, recordingTitle);
         
         // Skonfiguruj przyciski
-        const playBtn = document.getElementById('playRecordingBtn');
         const transcribeBtn = document.getElementById('transcribeRecordingBtn');
         const downloadBtn = document.getElementById('downloadRecordingBtn');
         const sendTextBtn = document.getElementById('sendTextBtn');
@@ -969,8 +1199,9 @@ Wprowadź klucz OpenAI API:`);
         const transcribeIcon = document.getElementById('transcribeIcon');
         const transcribeText = document.getElementById('transcribeText');
         
-        // Przycisk odtwarzania
-        playBtn.onclick = () => this.playRecording(id);
+        // Automatycznie załaduj nagranie do odtwarzacza
+        console.log('🔧 [SETUP] Automatyczne ładowanie nagrania do odtwarzacza, ID:', id);
+        await this.playRecording(id);
         
         // Przycisk pobierania
         downloadBtn.onclick = () => this.downloadRecording(id);
@@ -2057,6 +2288,96 @@ Wprowadź klucz OpenAI API:`);
         } catch (error) {
             console.error('❌ [QUICK-CACHE] Błąd czyszczenia:', error);
             window.location.reload(true);
+        }
+    }
+    
+    // Wyświetl transkrypcję z segmentami czasowymi
+    displayTranscriptionWithTimestamps(recording) {
+        const transcriptionContent = document.getElementById('transcriptionContent');
+        
+        if (!recording.transcription) {
+            transcriptionContent.innerHTML = `
+                <div class="text-center text-gray-400 py-8">
+                    <span class="text-4xl mb-4 block">🎤</span>
+                    <p>Brak transkrypcji</p>
+                    <p class="text-sm mt-2">Kliknij przycisk "Transkrybuj" poniżej aby rozpocząć transkrypcję tego nagrania.</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // Sprawdź czy mamy segmenty z timestamps
+        if (recording.transcriptionSegments && recording.transcriptionSegments.length > 0) {
+            console.log('🎵 [DISPLAY] Wyświetlam transkrypcję z timestamps, segmentów:', recording.transcriptionSegments.length);
+            
+            let html = '<div class="space-y-4">';
+            
+            recording.transcriptionSegments.forEach((segment, index) => {
+                const startTime = this.formatTimestamp(segment.start);
+                const endTime = this.formatTimestamp(segment.end);
+                
+                html += `
+                    <div class="flex gap-4 p-4 rounded-lg bg-white/5 border border-white/10 hover:bg-white/8 transition-all duration-200">
+                        <div class="flex-shrink-0 text-navigator-purple font-mono text-sm cursor-pointer hover:text-purple-300 transition-colors duration-200" 
+                             onclick="recorder.seekToTimestamp(${segment.start})" 
+                             title="Kliknij aby przejść do ${startTime}">
+                            <div class="bg-navigator-purple/20 px-2 py-1 rounded border border-navigator-purple/30">
+                                ${startTime}
+                            </div>
+                        </div>
+                        <div class="flex-1 text-gray-200 leading-relaxed">
+                            ${segment.text.trim()}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += '</div>';
+            transcriptionContent.innerHTML = html;
+            
+        } else {
+            // Stara transkrypcja bez timestamps - wyświetl jako zwykły tekst
+            console.log('🎵 [DISPLAY] Wyświetlam transkrypcję bez timestamps');
+            transcriptionContent.innerHTML = `
+                <div class="text-gray-200 leading-relaxed text-lg">
+                    ${recording.transcription}
+                </div>
+                <div class="text-xs text-gray-500 mt-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                    <strong>💡 Wskazówka:</strong> Aby uzyskać transkrypcję z znacznikami czasu, kliknij "Transkrybuj ponownie"
+                </div>
+            `;
+        }
+    }
+    
+    // Formatuj timestamp (sekundy) na mm:ss
+    formatTimestamp(seconds) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    }
+    
+    // Przeskocz do określonego czasu w odtwarzaczu
+    seekToTimestamp(seconds) {
+        console.log('⏭️ [SEEK] Przechodzę do czasu:', seconds, 's');
+        
+        if (this.audioPlayer && this.audioPlayer.audio) {
+            const duration = this.audioPlayer.audio.duration;
+            if (duration && isFinite(duration) && !isNaN(duration)) {
+                // Upewnij się że czas jest w zakresie nagrania
+                const seekTime = Math.max(0, Math.min(duration, seconds));
+                this.audioPlayer.audio.currentTime = seekTime;
+                
+                // Jeśli nie odtwarza, rozpocznij odtwarzanie
+                if (!this.audioPlayer.isPlaying) {
+                    this.audioPlayer.play();
+                }
+                
+                console.log('✅ [SEEK] Przeskok do:', seekTime, 's');
+            } else {
+                console.warn('⚠️ [SEEK] Nie można przeskoczyć - brak metadanych audio');
+            }
+        } else {
+            console.warn('⚠️ [SEEK] Nie można przeskoczyć - brak załadowanego audio');
         }
     }
 }
