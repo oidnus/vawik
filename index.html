@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#2196F3">
+    <title>Nagrywarka Audio</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192x192.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'navigator-dark': '#0F0F23',
+                        'navigator-mid': '#1A1A2E', 
+                        'navigator-blue': '#16213E',
+                        'navigator-purple': '#A855F7'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        .animate-pulse-scale {
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body class="m-0 p-0 box-border font-system bg-gradient-to-br from-navigator-dark via-navigator-mid to-navigator-blue min-h-screen text-gray-200 flex flex-col">
+    <!-- Header -->
+    <div class="p-5 text-center bg-navigator-dark/80 backdrop-blur-lg border-b border-navigator-purple/20">
+        <div class="text-2xl font-semibold text-navigator-purple mb-1 drop-shadow-lg">Vawik</div>
+        <div class="text-sm text-gray-400">Nagraj swoje myśli</div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex-1 flex flex-col items-center justify-center px-5 py-10 min-h-[60vh]">
+        <!-- Record Section - Minimalist Design -->
+        <div class="w-full max-w-sm mx-auto mb-15">
+            <!-- Main Recording Area -->
+            <div class="bg-white/5 backdrop-blur-sm rounded-3xl p-8 border border-white/10 shadow-2xl">
+                <!-- Status & Timer -->
+                <div class="text-center mb-8">
+                    <div class="text-lg text-gray-100 font-medium mb-2" id="status">Dotknij aby nagrać</div>
+                    <div class="text-4xl font-mono text-navigator-purple font-light tracking-wider" id="duration">00:00</div>
+                </div>
+                
+                <!-- Record Button -->
+                <div class="flex justify-center mb-6">
+                    <button class="w-24 h-24 rounded-full bg-gradient-to-br from-navigator-purple to-purple-600 text-white text-3xl cursor-pointer shadow-xl shadow-navigator-purple/30 transition-all duration-300 hover:scale-105 hover:shadow-2xl hover:shadow-navigator-purple/40 active:scale-95 flex items-center justify-center border-4 border-white/10" id="recordButton">
+                        ●
+                    </button>
+                </div>
+                
+                <!-- Recording Controls -->
+                <div class="hidden space-y-3" id="recordingControls">
+                    <div class="grid grid-cols-2 gap-3">
+                        <button class="py-4 px-6 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 font-medium cursor-pointer transition-all duration-300 hover:bg-amber-500/20 hover:border-amber-500/40 active:scale-95 flex items-center justify-center gap-2" id="resetButton">
+                            <span class="text-lg">🔄</span>
+                            Reset
+                        </button>
+                        <button class="py-4 px-6 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 font-medium cursor-pointer transition-all duration-300 hover:bg-red-500/20 hover:border-red-500/40 active:scale-95 flex items-center justify-center gap-2" id="cancelButton">
+                            <span class="text-lg">✕</span>
+                            Anuluj
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recordings Section -->
+        <div class="w-full">
+            <div class="text-lg font-semibold text-gray-100 mb-5 px-5">Ostatnie nagrania</div>
+            <div id="recordingsList" class="text-center pb-10 text-gray-500 italic">
+                Brak nagrań
+            </div>
+        </div>
+    </div>
+
+    <div class="h-10"></div>
+
+    <!-- Pełnoekranowy widok transkrypcji -->
+    <div class="fixed inset-0 w-full h-full bg-gradient-to-br from-navigator-dark via-navigator-mid to-navigator-blue z-[1000] hidden flex-col p-5 overflow-y-auto" id="transcriptionFullscreen">
+        <div class="flex justify-between items-center mb-8 pb-5 border-b border-navigator-purple/20">
+            <div class="text-2xl font-semibold text-navigator-purple drop-shadow-lg" id="transcriptionTitle">Transkrypcja</div>
+            <button class="bg-gradient-to-r from-gray-500 to-gray-600 border-0 text-white px-4 py-2 rounded-lg cursor-pointer text-sm font-medium transition-all duration-300 shadow-md shadow-gray-500/30 hover:from-gray-600 hover:to-gray-700 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-gray-500/40" onclick="recorder.closeTranscriptionView()">
+                ✕ Zamknij
+            </button>
+        </div>
+        <div class="mb-5 p-4 bg-navigator-purple/10 rounded-lg border-l-4 border-navigator-purple text-sm text-gray-400" id="transcriptionMetadata"></div>
+        <div class="flex-1 bg-gray-800/80 backdrop-blur-lg rounded-2xl p-8 border border-navigator-purple/20 text-lg leading-relaxed text-gray-200 overflow-y-auto" id="transcriptionContent"></div>
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator && window.location.protocol !== 'file:') {
+            navigator.serviceWorker.register('sw.js').catch(error => {
+                console.log('Service Worker registration failed:', error);
+            });
+        } else if (window.location.protocol === 'file:') {
+            console.log('Service Worker not available for file:// protocol');
+        }
+    </script>
+</body>
+</html>
