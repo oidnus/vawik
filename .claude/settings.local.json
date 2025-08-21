@@ -6,7 +6,8 @@
       "Bash(git push:*)",
       "Bash(git tag:*)",
       "Bash(python3:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(rm:*)"
     ],
     "deny": [],
     "ask": []

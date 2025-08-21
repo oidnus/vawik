@@ -107,19 +107,24 @@ class VawikDB {
     }
 
     async saveTitle(recordingId, title) {
-        console.log(`💾 [DB] Zapisuję tytuł dla ${recordingId}: "${title}"`);
+        console.log(`💾 [DB] Zapisuję tytuł dla ${recordingId} (typ: ${typeof recordingId}): "${title}"`);
         return new Promise((resolve, reject) => {
             const transaction = this.db.transaction(['titles'], 'readwrite');
             const store = transaction.objectStore('titles');
-            const request = store.put({ recordingId, title });
+            
+            // Konwertuj recordingId na liczbę jeśli to string
+            const numericId = typeof recordingId === 'string' ? parseInt(recordingId) : recordingId;
+            console.log(`💾 [DB] Konwertowane ID: ${numericId} (typ: ${typeof numericId})`);
+            
+            const request = store.put({ recordingId: numericId, title });
             
             request.onsuccess = () => {
-                console.log(`✅ [DB] Tytuł zapisany dla ${recordingId}`);
+                console.log(`✅ [DB] Tytuł zapisany dla ${numericId}`);
                 resolve();
             };
             
             request.onerror = () => {
-                console.error(`❌ [DB] Błąd zapisu tytułu dla ${recordingId}:`, request.error);
+                console.error(`❌ [DB] Błąd zapisu tytułu dla ${numericId}:`, request.error);
                 reject(request.error);
             };
         });
@@ -129,16 +134,21 @@ class VawikDB {
         return new Promise((resolve, reject) => {
             const transaction = this.db.transaction(['titles'], 'readonly');
             const store = transaction.objectStore('titles');
-            const request = store.get(recordingId);
+            
+            // Konwertuj recordingId na liczbę jeśli to string
+            const numericId = typeof recordingId === 'string' ? parseInt(recordingId) : recordingId;
+            console.log(`🔍 [DB] Pobieranie tytułu dla ${recordingId} → ${numericId} (typ: ${typeof numericId})`);
+            
+            const request = store.get(numericId);
             
             request.onsuccess = () => {
                 const result = request.result?.title || null;
-                console.log(`🔍 [DB] Tytuł dla ${recordingId}: "${result}"`);
+                console.log(`🔍 [DB] Tytuł dla ${numericId}: "${result}" (obiekt:`, request.result, ')');
                 resolve(result);
             };
             
             request.onerror = () => {
-                console.error(`❌ [DB] Błąd pobierania tytułu dla ${recordingId}:`, request.error);
+                console.error(`❌ [DB] Błąd pobierania tytułu dla ${numericId}:`, request.error);
                 reject(request.error);
             };
         });
@@ -262,6 +272,9 @@ class AudioRecorder {
         await this.checkForInterruptedRecording();
         
         await this.loadRecordings();
+        
+        // Sprawdź ostrzeżenie o kluczu API
+        this.updateApiKeyWarning();
         
         // Żądanie uprawnień do mikrofonu przy starcie
         try {
@@ -393,6 +406,14 @@ class AudioRecorder {
                 const minutes = Math.floor(elapsed / 60).toString().padStart(2, '0');
                 const seconds = (elapsed % 60).toString().padStart(2, '0');
                 this.duration.textContent = `${minutes}:${seconds}`;
+                
+                // Sprawdź limit czasu nagrywania
+                const maxRecordingTime = this.getMaxRecordingTime();
+                if (maxRecordingTime > 0 && elapsed >= maxRecordingTime) {
+                    console.log(`⏰ [TIMER] Osiągnięto limit czasu nagrywania: ${maxRecordingTime}s`);
+                    this.stopRecording();
+                    this.status.textContent = `Nagrywanie zatrzymane (limit ${Math.floor(maxRecordingTime/60)}:${(maxRecordingTime%60).toString().padStart(2, '0')})`;
+                }
             }
         }, 1000);
     }
@@ -422,6 +443,10 @@ class AudioRecorder {
             };
             
             await this.saveToDatabase(recording);
+            
+            // Sprawdź i wyczyść stare nagrania jeśli przekroczono limit
+            await this.checkAndCleanOldRecordings();
+            
             await this.loadRecordings();
             
             // Wyczyść backup po udanym zapisaniu
@@ -560,12 +585,13 @@ class AudioRecorder {
     }
     
     startBackupTimer() {
-        // Automatyczne zapisywanie co 5 sekund
+        // Automatyczne zapisywanie zgodnie z ustawieniem użytkownika
+        const intervalMs = this.getBackupInterval();
         this.backupInterval = setInterval(() => {
             if (this.isRecording && this.audioChunks.length > 0) {
                 this.saveBackup();
             }
-        }, 5000);
+        }, intervalMs);
     }
     
     saveBackup() {
@@ -732,7 +758,7 @@ class AudioRecorder {
             // Sprawdź czy jest ustawiony klucz API
             const apiKey = this.getOpenAIKey();
             if (!apiKey) {
-                this.showAPIKeyDialog();
+                this.showApiKeyMissingError();
                 return;
             }
             
@@ -756,7 +782,7 @@ class AudioRecorder {
             // Przygotuj FormData dla OpenAI API
             const formData = new FormData();
             formData.append('file', audioBlob, `recording_${id}.webm`);
-            formData.append('model', 'whisper-1');
+            formData.append('model', this.getTranscriptionModel());
             formData.append('language', 'pl');
             formData.append('response_format', 'text');
             
@@ -879,6 +905,10 @@ Wprowadź klucz OpenAI API:`);
         }, 2000);
     }
     
+    getWebhookUrl() {
+        return localStorage.getItem('webhook_url');
+    }
+    
     async openTranscriptionView(id) {
         try {
             const recordings = await this.db.getRecordings();
@@ -894,9 +924,13 @@ Wprowadź klucz OpenAI API:`);
         
             // Sprawdź czy mamy wygenerowany tytuł dla tego nagrania
             const recordingTitle = await this.getRecordingTitle(recording.id) || 'Brak tytułu';
+            
+        // Wyświetl tytuł w edytowalnym polu
+        const titleDisplayElement = document.getElementById('titleDisplay');
+        titleDisplayElement.textContent = recordingTitle;
+        console.log('📋 [TITLE] Wyświetlam tytuł:', recordingTitle);
         
         document.getElementById('transcriptionMetadata').innerHTML = `
-            <strong>Tytuł nagrania:</strong> ${recordingTitle}<br>
             <strong>Data:</strong> ${new Date(recording.date).toLocaleString('pl-PL')}<br>
             <strong>Czas trwania:</strong> ${Math.floor(recording.duration/60)}:${(recording.duration%60).toString().padStart(2, '0')}<br>
             <strong>Status:</strong> ${recording.corrupted ? 'Odzyskane' : 'Kompletne'}
@@ -904,10 +938,16 @@ Wprowadź klucz OpenAI API:`);
         
         document.getElementById('transcriptionContent').textContent = recording.transcription || 'Brak transkrypcji. Kliknij przycisk "Transkrybuj" poniżej aby rozpocząć transkrypcję tego nagrania.';
         
+        // Skonfiguruj edycję tytułu
+        console.log('🔧 [TITLE] Przekazuję ID do setupTitleEditing:', id, 'typ:', typeof id);
+        this.setupTitleEditing(id, recordingTitle);
+        
         // Skonfiguruj przyciski
         const playBtn = document.getElementById('playRecordingBtn');
         const transcribeBtn = document.getElementById('transcribeRecordingBtn');
         const downloadBtn = document.getElementById('downloadRecordingBtn');
+        const sendTextBtn = document.getElementById('sendTextBtn');
+        const sendAudioBtn = document.getElementById('sendAudioBtn');
         const deleteBtn = document.getElementById('deleteRecordingBtn');
         const transcribeIcon = document.getElementById('transcribeIcon');
         const transcribeText = document.getElementById('transcribeText');
@@ -918,40 +958,66 @@ Wprowadź klucz OpenAI API:`);
         // Przycisk pobierania
         downloadBtn.onclick = () => this.downloadRecording(id);
         
-        // Przycisk usuwania
-        deleteBtn.onclick = () => this.deleteRecording(id);
-        
-        // Przycisk transkrypcji
-        if (recording.transcribing) {
-            transcribeIcon.textContent = '⏳';
-            transcribeText.textContent = 'Transkrybowanie...';
-            transcribeBtn.disabled = true;
-            transcribeBtn.className = 'py-3 px-6 rounded-lg bg-gray-500/20 border border-gray-500/30 text-gray-400 font-medium cursor-not-allowed transition-all duration-300 flex items-center justify-center gap-2';
-        } else if (recording.transcription) {
-            transcribeIcon.textContent = '🔄';
-            transcribeText.textContent = 'Transkrybuj ponownie';
-            transcribeBtn.disabled = false;
-            transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
-            transcribeBtn.onclick = async () => {
-                // Usuń istniejącą transkrypcję i rozpocznij nową
-                const updatedRecordings = await this.db.getRecordings();
-                const currentRecording = updatedRecordings.find(r => r.id.toString() === id);
-                if (currentRecording) {
-                    delete currentRecording.transcription;
-                    await this.db.saveRecording(currentRecording);
-                }
-                await this.transcribeRecording(id);
-                await this.openTranscriptionView(id); // Odśwież widok
-            };
+        // Przyciski webhook - pokaż tylko jeśli webhook jest skonfigurowany
+        const webhookUrl = this.getWebhookUrl();
+        if (webhookUrl) {
+            sendTextBtn.classList.remove('hidden');
+            sendAudioBtn.classList.remove('hidden');
+            
+            // Przycisk wysyłania tekstu
+            sendTextBtn.onclick = async () => await this.sendTextToWebhook(id);
+            
+            // Przycisk wysyłania audio
+            sendAudioBtn.onclick = async () => await this.sendAudioToWebhook(id);
         } else {
-            transcribeIcon.textContent = '🎤';
-            transcribeText.textContent = 'Transkrybuj';
-            transcribeBtn.disabled = false;
-            transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
-            transcribeBtn.onclick = async () => {
-                await this.transcribeRecording(id);
-                await this.openTranscriptionView(id); // Odśwież widok
-            };
+            sendTextBtn.classList.add('hidden');
+            sendAudioBtn.classList.add('hidden');
+        }
+        
+        // Przycisk usuwania
+        deleteBtn.onclick = async () => {
+            console.log('🗑️ [DELETE] Przycisk usuwania kliknięty, ID:', id);
+            await this.deleteRecording(id);
+        };
+        
+        // Przycisk transkrypcji - pokaż tylko jeśli jest klucz OpenAI API
+        const hasApiKey = this.getOpenAIKey();
+        if (hasApiKey) {
+            transcribeBtn.classList.remove('hidden');
+            
+            if (recording.transcribing) {
+                transcribeIcon.textContent = '⏳';
+                transcribeText.textContent = 'Transkrybowanie...';
+                transcribeBtn.disabled = true;
+                transcribeBtn.className = 'py-3 px-6 rounded-lg bg-gray-500/20 border border-gray-500/30 text-gray-400 font-medium cursor-not-allowed transition-all duration-300 flex items-center justify-center gap-2';
+            } else if (recording.transcription) {
+                transcribeIcon.textContent = '🔄';
+                transcribeText.textContent = 'Transkrybuj ponownie';
+                transcribeBtn.disabled = false;
+                transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
+                transcribeBtn.onclick = async () => {
+                    // Usuń istniejącą transkrypcję i rozpocznij nową
+                    const updatedRecordings = await this.db.getRecordings();
+                    const currentRecording = updatedRecordings.find(r => r.id.toString() === id);
+                    if (currentRecording) {
+                        delete currentRecording.transcription;
+                        await this.db.saveRecording(currentRecording);
+                    }
+                    await this.transcribeRecording(id);
+                    await this.openTranscriptionView(id); // Odśwież widok
+                };
+            } else {
+                transcribeIcon.textContent = '🎤';
+                transcribeText.textContent = 'Transkrybuj';
+                transcribeBtn.disabled = false;
+                transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
+                transcribeBtn.onclick = async () => {
+                    await this.transcribeRecording(id);
+                    await this.openTranscriptionView(id); // Odśwież widok
+                };
+            }
+        } else {
+            transcribeBtn.classList.add('hidden');
         }
         
         // Pokaż pełnoekranowy widok
@@ -977,20 +1043,28 @@ Wprowadź klucz OpenAI API:`);
     }
     
     async deleteRecording(id) {
+        console.log('🗑️ [DELETE] Funkcja deleteRecording wywołana z ID:', id, typeof id);
         try {
             const recordings = await this.db.getRecordings();
+            console.log('🗑️ [DELETE] Pobrano nagrania:', recordings.length);
             const recording = recordings.find(r => r.id.toString() === id);
+            console.log('🗑️ [DELETE] Znalezione nagranie:', recording);
             
             if (!recording) {
+                console.error('🗑️ [DELETE] Nie znaleziono nagrania o ID:', id);
                 this.status.textContent = 'Nie znaleziono nagrania';
                 return;
             }
             
             const confirmMessage = `Czy na pewno chcesz usunąć nagranie?\n\n"${recording.name}"\nCzas trwania: ${Math.floor(recording.duration/60)}:${(recording.duration%60).toString().padStart(2, '0')}`;
+            console.log('🗑️ [DELETE] Pokazuję confirm dialog');
             
             if (confirm(confirmMessage)) {
-                // Usuń nagranie z bazy danych
-                await this.db.deleteRecording(id);
+                console.log('🗑️ [DELETE] Użytkownik potwierdził usunięcie');
+                // Usuń nagranie z bazy danych (konwertuj id na liczbę)
+                const numericId = parseInt(id);
+                console.log('🗑️ [DELETE] Konwertuję ID na liczbę:', numericId);
+                await this.db.deleteRecording(numericId);
                 console.log(`🗑️ [DELETE] Nagranie ${id} usunięte z IndexedDB`);
                 
                 // Zamknij widok transkrypcji
@@ -1098,6 +1172,8 @@ Wprowadź klucz OpenAI API:`);
             if (!apiKey) {
                 console.log('❌ [TITLE] Brak klucza API - używam domyślnego tytułu');
                 this.setRecordingTitle(`Nagranie ${new Date().toLocaleString('pl-PL')}`);
+                // Pokaż ostrzeżenie u góry ale nie zmieniaj statusu nagrywania
+                this.updateApiKeyWarning();
                 return;
             }
             
@@ -1105,7 +1181,7 @@ Wprowadź klucz OpenAI API:`);
             console.log('🎤 [TITLE] Przygotowuję wysyłkę do Whisper API');
             const formData = new FormData();
             formData.append('file', audioBlob, `title_fragment_${this.currentRecordingId}.webm`);
-            formData.append('model', 'whisper-1');
+            formData.append('model', this.getTranscriptionModel());
             formData.append('language', 'pl');
             formData.append('response_format', 'text');
             
@@ -1159,7 +1235,7 @@ Wprowadź klucz OpenAI API:`);
             console.log(`🔑 [GPT] Użycie klucza API: ${apiKey ? 'JEST' : 'BRAK'}`);
             
             const payload = {
-                model: 'gpt-4.1-nano',
+                model: this.getTitleModel(),
                 messages: [{
                     role: 'user',
                     content: `Na podstawie tej transkrypcji stwórz krótki, opisowy tytuł (max 50 znaków):\n\n${transcription}\n\nOdpowiedz tylko tytułem, bez dodatkowego tekstu.`
@@ -1241,6 +1317,729 @@ Wprowadź klucz OpenAI API:`);
         } else {
             this.status.textContent = 'Nagrywanie...';
             console.log('🔄 [TITLE] Status: Nagrywanie...');
+        }
+    }
+    
+    // Settings View Methods
+    openSettingsView() {
+        const fullscreen = document.getElementById('settingsFullscreen');
+        fullscreen.className = 'fixed inset-0 w-full h-full bg-gradient-to-br from-navigator-dark via-navigator-mid to-navigator-blue z-[1000] flex flex-col p-5 overflow-y-auto';
+        
+        document.body.style.overflow = 'hidden';
+        
+        this.loadApiKeySettings();
+    }
+    
+    closeSettingsView() {
+        const fullscreen = document.getElementById('settingsFullscreen');
+        fullscreen.className = 'fixed inset-0 w-full h-full bg-gradient-to-br from-navigator-dark via-navigator-mid to-navigator-blue z-[1000] hidden flex-col p-5 overflow-y-auto';
+        
+        document.body.style.overflow = 'auto';
+    }
+    
+    loadApiKeySettings() {
+        const apiKeyInput = document.getElementById('apiKeyInput');
+        const statusDiv = document.getElementById('apiKeyStatus');
+        
+        const savedKey = localStorage.getItem('openai_api_key');
+        
+        if (savedKey) {
+            apiKeyInput.value = savedKey;
+            statusDiv.innerHTML = '<span class="text-green-400">✅ Klucz API zapisany</span>';
+        } else {
+            apiKeyInput.value = '';
+            statusDiv.innerHTML = '<span class="text-gray-400">⚠️ Brak klucza API</span>';
+        }
+        
+        // Załaduj również ustawienia nagrywania
+        this.loadRecordingSettings();
+        
+        // Załaduj ustawienia modeli AI
+        this.loadAiModelsSettings();
+        
+        // Załaduj ustawienia webhooka
+        this.loadWebhookSettings();
+        
+        // Sprawdź i pokaż ostrzeżenie o kluczu API
+        this.updateApiKeyWarning();
+    }
+    
+    updateApiKeyWarning() {
+        const apiKeyWarning = document.getElementById('apiKeyWarning');
+        const hasApiKey = localStorage.getItem('openai_api_key');
+        
+        if (hasApiKey) {
+            apiKeyWarning.classList.add('hidden');
+        } else {
+            apiKeyWarning.classList.remove('hidden');
+        }
+    }
+    
+    showApiKeyMissingError() {
+        this.status.textContent = 'Brakuje klucza OpenAI API';
+        // Pokaż ostrzeżenie u góry
+        this.updateApiKeyWarning();
+    }
+    
+    loadRecordingSettings() {
+        const maxRecordingsInput = document.getElementById('maxRecordingsInput');
+        const maxRecordingTimeInput = document.getElementById('maxRecordingTimeInput');
+        const backupIntervalInput = document.getElementById('backupIntervalInput');
+        const statusDiv = document.getElementById('recordingSettingsStatus');
+        
+        // Pobierz ustawienia z localStorage lub użyj domyślnych wartości
+        const maxRecordings = localStorage.getItem('max_recordings') || '10';
+        const maxRecordingTime = localStorage.getItem('max_recording_time') || '0';
+        const backupInterval = localStorage.getItem('backup_interval') || '5';
+        
+        maxRecordingsInput.value = maxRecordings;
+        maxRecordingTimeInput.value = maxRecordingTime;
+        backupIntervalInput.value = backupInterval;
+        
+        statusDiv.innerHTML = '<span class="text-gray-400">📊 Ustawienia załadowane</span>';
+    }
+    
+    saveApiKey() {
+        const apiKeyInput = document.getElementById('apiKeyInput');
+        const statusDiv = document.getElementById('apiKeyStatus');
+        const apiKey = apiKeyInput.value.trim();
+        
+        if (!apiKey) {
+            statusDiv.innerHTML = '<span class="text-red-400">❌ Wprowadź klucz API</span>';
+            return;
+        }
+        
+        if (!apiKey.startsWith('sk-')) {
+            statusDiv.innerHTML = '<span class="text-red-400">❌ Nieprawidłowy format klucza API (powinien zaczynać się od "sk-")</span>';
+            return;
+        }
+        
+        localStorage.setItem('openai_api_key', apiKey);
+        statusDiv.innerHTML = '<span class="text-green-400">✅ Klucz API zapisany</span>';
+        
+        // Zaktualizuj ostrzeżenie
+        this.updateApiKeyWarning();
+    }
+    
+    clearApiKey() {
+        const apiKeyInput = document.getElementById('apiKeyInput');
+        const statusDiv = document.getElementById('apiKeyStatus');
+        
+        if (confirm('Czy na pewno chcesz usunąć zapisany klucz API?')) {
+            localStorage.removeItem('openai_api_key');
+            apiKeyInput.value = '';
+            statusDiv.innerHTML = '<span class="text-gray-400">⚠️ Klucz API usunięty</span>';
+            
+            // Zaktualizuj ostrzeżenie
+            this.updateApiKeyWarning();
+        }
+    }
+    
+    saveRecordingSettings() {
+        const maxRecordingsInput = document.getElementById('maxRecordingsInput');
+        const maxRecordingTimeInput = document.getElementById('maxRecordingTimeInput');
+        const backupIntervalInput = document.getElementById('backupIntervalInput');
+        const statusDiv = document.getElementById('recordingSettingsStatus');
+        
+        const maxRecordings = parseInt(maxRecordingsInput.value);
+        const maxRecordingTime = parseInt(maxRecordingTimeInput.value);
+        const backupInterval = parseInt(backupIntervalInput.value);
+        
+        // Walidacja
+        if (isNaN(maxRecordings) || maxRecordings < 10 || maxRecordings > 10) {
+            statusDiv.innerHTML = '<span class="text-red-400">❌ Maksymalna liczba nagrań musi być 10</span>';
+            return;
+        }
+        
+        if (isNaN(maxRecordingTime) || maxRecordingTime < 0 || maxRecordingTime > 3600) {
+            statusDiv.innerHTML = '<span class="text-red-400">❌ Maksymalny czas nagrywania musi być między 0 a 3600 sekund</span>';
+            return;
+        }
+        
+        if (isNaN(backupInterval) || backupInterval < 3 || backupInterval > 60) {
+            statusDiv.innerHTML = '<span class="text-red-400">❌ Interwał backupu musi być między 3 a 60 sekund</span>';
+            return;
+        }
+        
+        // Zapisz ustawienia
+        localStorage.setItem('max_recordings', maxRecordings.toString());
+        localStorage.setItem('max_recording_time', maxRecordingTime.toString());
+        localStorage.setItem('backup_interval', backupInterval.toString());
+        
+        statusDiv.innerHTML = '<span class="text-green-400">✅ Ustawienia nagrywania zapisane</span>';
+        
+        // Zaktualizuj interwał backupu jeśli nagrywanie jest aktywne
+        if (this.isRecording && this.backupInterval) {
+            clearInterval(this.backupInterval);
+            this.startBackupTimer();
+        }
+    }
+    
+    resetRecordingSettings() {
+        const maxRecordingsInput = document.getElementById('maxRecordingsInput');
+        const maxRecordingTimeInput = document.getElementById('maxRecordingTimeInput');
+        const backupIntervalInput = document.getElementById('backupIntervalInput');
+        const statusDiv = document.getElementById('recordingSettingsStatus');
+        
+        if (confirm('Czy na pewno chcesz przywrócić domyślne ustawienia nagrywania?')) {
+            // Ustaw domyślne wartości
+            maxRecordingsInput.value = '10';
+            maxRecordingTimeInput.value = '0';
+            backupIntervalInput.value = '5';
+            
+            // Usuń z localStorage
+            localStorage.removeItem('max_recordings');
+            localStorage.removeItem('max_recording_time');
+            localStorage.removeItem('backup_interval');
+            
+            statusDiv.innerHTML = '<span class="text-gray-400">🔄 Przywrócono domyślne ustawienia</span>';
+        }
+    }
+    
+    // Pomocnicze funkcje do pobierania ustawień
+    getMaxRecordings() {
+        return parseInt(localStorage.getItem('max_recordings') || '10');
+    }
+    
+    getMaxRecordingTime() {
+        return parseInt(localStorage.getItem('max_recording_time') || '0');
+    }
+    
+    getBackupInterval() {
+        return parseInt(localStorage.getItem('backup_interval') || '5') * 1000; // Konwersja na milisekundy
+    }
+    
+    async checkAndCleanOldRecordings() {
+        try {
+            const maxRecordings = this.getMaxRecordings();
+            const recordings = await this.db.getRecordings();
+            
+            if (recordings.length > maxRecordings) {
+                console.log(`🧹 [CLEANUP] Przekroczono limit ${maxRecordings} nagrań (${recordings.length}). Usuwanie najstarszych...`);
+                
+                // Sortuj nagrania według daty (najstarsze na końcu)
+                const sortedRecordings = recordings.sort((a, b) => new Date(b.date) - new Date(a.date));
+                
+                // Usuń najstarsze nagrania
+                const recordingsToDelete = sortedRecordings.slice(maxRecordings);
+                
+                for (const recording of recordingsToDelete) {
+                    await this.db.deleteRecording(recording.id);
+                    console.log(`🗑️ [CLEANUP] Usunięto stare nagranie: ${recording.id}`);
+                }
+                
+                console.log(`✅ [CLEANUP] Usunięto ${recordingsToDelete.length} najstarszych nagrań`);
+            }
+        } catch (error) {
+            console.error('❌ [CLEANUP] Błąd czyszczenia starych nagrań:', error);
+        }
+    }
+    
+    loadAiModelsSettings() {
+        const transcriptionModelInput = document.getElementById('transcriptionModelInput');
+        const titleModelInput = document.getElementById('titleModelInput');
+        const statusDiv = document.getElementById('aiModelsStatus');
+        
+        // Pobierz ustawienia z localStorage lub użyj domyślnych wartości
+        const transcriptionModel = localStorage.getItem('transcription_model') || 'whisper-1';
+        const titleModel = localStorage.getItem('title_model') || 'gpt-4.1-nano';
+        
+        transcriptionModelInput.value = transcriptionModel;
+        titleModelInput.value = titleModel;
+        
+        statusDiv.innerHTML = '<span class="text-gray-400">🤖 Modele załadowane</span>';
+    }
+    
+    saveAiModels() {
+        const transcriptionModelInput = document.getElementById('transcriptionModelInput');
+        const titleModelInput = document.getElementById('titleModelInput');
+        const statusDiv = document.getElementById('aiModelsStatus');
+        
+        const transcriptionModel = transcriptionModelInput.value.trim();
+        const titleModel = titleModelInput.value.trim();
+        
+        // Walidacja
+        if (!transcriptionModel) {
+            statusDiv.innerHTML = '<span class="text-red-400">❌ Wprowadź model do transkrypcji</span>';
+            return;
+        }
+        
+        if (!titleModel) {
+            statusDiv.innerHTML = '<span class="text-red-400">❌ Wprowadź model do generowania tytułów</span>';
+            return;
+        }
+        
+        // Zapisz ustawienia
+        localStorage.setItem('transcription_model', transcriptionModel);
+        localStorage.setItem('title_model', titleModel);
+        
+        statusDiv.innerHTML = '<span class="text-green-400">✅ Modele AI zapisane</span>';
+    }
+    
+    resetAiModels() {
+        const transcriptionModelInput = document.getElementById('transcriptionModelInput');
+        const titleModelInput = document.getElementById('titleModelInput');
+        const statusDiv = document.getElementById('aiModelsStatus');
+        
+        if (confirm('Czy na pewno chcesz przywrócić domyślne modele AI?')) {
+            // Ustaw domyślne wartości
+            transcriptionModelInput.value = 'whisper-1';
+            titleModelInput.value = 'gpt-4.1-nano';
+            
+            // Usuń z localStorage
+            localStorage.removeItem('transcription_model');
+            localStorage.removeItem('title_model');
+            
+            statusDiv.innerHTML = '<span class="text-gray-400">🔄 Przywrócono domyślne modele</span>';
+        }
+    }
+    
+    // Pomocnicze funkcje do pobierania modeli AI
+    getTranscriptionModel() {
+        return localStorage.getItem('transcription_model') || 'whisper-1';
+    }
+    
+    getTitleModel() {
+        return localStorage.getItem('title_model') || 'gpt-4.1-nano';
+    }
+    
+    setupTitleEditing(recordingId, currentTitle) {
+        const editTitleBtn = document.getElementById('editTitleBtn');
+        const titleDisplay = document.getElementById('titleDisplay');
+        const titleEdit = document.getElementById('titleEdit');
+        const titleInput = document.getElementById('titleInput');
+        const saveTitleBtn = document.getElementById('saveTitleBtn');
+        const cancelTitleBtn = document.getElementById('cancelTitleBtn');
+        
+        // Przycisk "Edytuj"
+        editTitleBtn.onclick = () => {
+            console.log('🔧 [TITLE] Kliknięto edytuj, aktualny tytuł:', currentTitle);
+            titleDisplay.parentElement.classList.add('hidden');
+            titleEdit.classList.remove('hidden');
+            titleInput.value = currentTitle || '';
+            titleInput.focus();
+            titleInput.select();
+        };
+        
+        // Przycisk "Zapisz"
+        saveTitleBtn.onclick = async () => {
+            const newTitle = titleInput.value.trim();
+            console.log('💾 [TITLE] Zapisuję nowy tytuł:', newTitle, 'dla ID:', recordingId);
+            
+            if (!newTitle) {
+                this.status.textContent = 'Tytuł nie może być pusty';
+                return;
+            }
+            
+            try {
+                // Zapisz nowy tytuł
+                await this.db.saveTitle(recordingId, newTitle);
+                console.log('✅ [TITLE] Tytuł zapisany w bazie');
+                
+                // Zaktualizuj wyświetlanie
+                titleDisplay.textContent = newTitle;
+                titleDisplay.parentElement.classList.remove('hidden');
+                titleEdit.classList.add('hidden');
+                
+                // Zaktualizuj również zmienną lokalną
+                currentTitle = newTitle;
+                console.log('🔄 [TITLE] Zaktualizowano lokalną zmienną tytułu:', currentTitle);
+                
+                // Odśwież listę nagrań (zaktualizuje tytuły)
+                await this.loadRecordings();
+                console.log('📝 [TITLE] Lista nagrań odświeżona');
+                
+                this.status.textContent = 'Tytuł zapisany';
+            } catch (error) {
+                console.error('❌ [TITLE] Błąd zapisu tytułu:', error);
+                this.status.textContent = 'Błąd zapisu tytułu';
+            }
+        };
+        
+        // Przycisk "Anuluj"
+        cancelTitleBtn.onclick = () => {
+            titleDisplay.parentElement.classList.remove('hidden');
+            titleEdit.classList.add('hidden');
+            titleInput.value = '';
+        };
+        
+        // Enter = zapisz, Escape = anuluj
+        titleInput.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                saveTitleBtn.click();
+            } else if (e.key === 'Escape') {
+                cancelTitleBtn.click();
+            }
+        };
+    }
+    
+    // Funkcje zarządzania webhookiem
+    loadWebhookSettings() {
+        const webhookUrlInput = document.getElementById('webhookUrlInput');
+        const statusDiv = document.getElementById('webhookStatus');
+        
+        const savedUrl = localStorage.getItem('webhook_url');
+        
+        if (savedUrl) {
+            webhookUrlInput.value = savedUrl;
+            statusDiv.innerHTML = '<span class="text-green-400">✅ Webhook skonfigurowany</span>';
+        } else {
+            webhookUrlInput.value = '';
+            statusDiv.innerHTML = '<span class="text-gray-400">⚠️ Brak webhooka</span>';
+        }
+    }
+    
+    saveWebhook() {
+        const webhookUrlInput = document.getElementById('webhookUrlInput');
+        const statusDiv = document.getElementById('webhookStatus');
+        const url = webhookUrlInput.value.trim();
+        
+        if (!url) {
+            statusDiv.innerHTML = '<span class="text-red-400">❌ Wprowadź URL webhooka</span>';
+            return;
+        }
+        
+        // Podstawowa walidacja URL
+        try {
+            new URL(url);
+        } catch {
+            statusDiv.innerHTML = '<span class="text-red-400">❌ Nieprawidłowy format URL</span>';
+            return;
+        }
+        
+        localStorage.setItem('webhook_url', url);
+        statusDiv.innerHTML = '<span class="text-green-400">✅ Webhook zapisany</span>';
+    }
+    
+    clearWebhook() {
+        const webhookUrlInput = document.getElementById('webhookUrlInput');
+        const statusDiv = document.getElementById('webhookStatus');
+        
+        if (confirm('Czy na pewno chcesz usunąć webhook?')) {
+            localStorage.removeItem('webhook_url');
+            webhookUrlInput.value = '';
+            statusDiv.innerHTML = '<span class="text-gray-400">⚠️ Webhook usunięty</span>';
+        }
+    }
+    
+    async sendTextToWebhook(id) {
+        const textIcon = document.getElementById('textIcon');
+        const textBtnText = document.getElementById('textBtnText');
+        const sendTextBtn = document.getElementById('sendTextBtn');
+        
+        try {
+            const webhookUrl = this.getWebhookUrl();
+            if (!webhookUrl) {
+                this.status.textContent = 'Brak skonfigurowanego webhooka';
+                return;
+            }
+            
+            // Zablokuj przycisk i pokaż status
+            sendTextBtn.disabled = true;
+            textIcon.textContent = '⏳';
+            textBtnText.textContent = 'Wysyłam...';
+            sendTextBtn.className = 'py-3 px-6 rounded-lg bg-gray-500/20 border border-gray-500/30 text-gray-400 font-medium cursor-not-allowed transition-all duration-300 flex items-center justify-center gap-2';
+            
+            const recordings = await this.db.getRecordings();
+            const recording = recordings.find(r => r.id.toString() === id);
+            
+            if (!recording) {
+                this.status.textContent = 'Nie znaleziono nagrania';
+                this.resetTextButton();
+                return;
+            }
+            
+            // Jeśli nie ma transkrypcji, najpierw ją wygeneruj
+            if (!recording.transcription) {
+                this.status.textContent = 'Generuję transkrypcję przed wysłaniem...';
+                textBtnText.textContent = 'Transkrybowanie...';
+                
+                await this.transcribeRecording(id);
+                
+                // Pobierz zaktualizowane nagranie
+                const updatedRecordings = await this.db.getRecordings();
+                const updatedRecording = updatedRecordings.find(r => r.id.toString() === id);
+                
+                if (!updatedRecording || !updatedRecording.transcription) {
+                    this.status.textContent = 'Błąd generowania transkrypcji';
+                    this.resetTextButton();
+                    return;
+                }
+                
+                // Zaktualizuj zmienną
+                Object.assign(recording, updatedRecording);
+            }
+            
+            // Przygotuj dane tekstowe do wysłania
+            const recordingTitle = await this.getRecordingTitle(recording.id) || recording.name;
+            const payload = {
+                type: 'text',
+                id: recording.id,
+                title: recordingTitle,
+                name: recording.name,
+                date: recording.date,
+                duration: recording.duration,
+                transcription: recording.transcription,
+                corrupted: recording.corrupted || false
+            };
+            
+            this.status.textContent = 'Wysyłam tekst do webhooka...';
+            textBtnText.textContent = 'Wysyłam...';
+            
+            // Wyślij POST request z JSON
+            const response = await fetch(webhookUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload)
+            });
+            
+            if (response.ok) {
+                this.status.textContent = 'Tekst wysłany pomyślnie!';
+                textIcon.textContent = '✅';
+                textBtnText.textContent = 'Wysłano';
+                sendTextBtn.className = 'py-3 px-6 rounded-lg bg-green-500/20 border border-green-500/30 text-green-300 font-medium cursor-not-allowed transition-all duration-300 flex items-center justify-center gap-2';
+                
+                // Przywróć przycisk po 3 sekundach
+                setTimeout(() => {
+                    this.resetTextButton();
+                }, 3000);
+            } else {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+        } catch (error) {
+            console.error('❌ [TEXT-WEBHOOK] Błąd wysyłania:', error);
+            this.handleWebhookError(error, textIcon, textBtnText, sendTextBtn, 'resetTextButton');
+        }
+    }
+    
+    async sendAudioToWebhook(id) {
+        const audioIcon = document.getElementById('audioIcon');
+        const audioBtnText = document.getElementById('audioBtnText');
+        const sendAudioBtn = document.getElementById('sendAudioBtn');
+        
+        try {
+            const webhookUrl = this.getWebhookUrl();
+            if (!webhookUrl) {
+                this.status.textContent = 'Brak skonfigurowanego webhooka';
+                return;
+            }
+            
+            // Zablokuj przycisk i pokaż status
+            sendAudioBtn.disabled = true;
+            audioIcon.textContent = '⏳';
+            audioBtnText.textContent = 'Wysyłam...';
+            sendAudioBtn.className = 'py-3 px-6 rounded-lg bg-gray-500/20 border border-gray-500/30 text-gray-400 font-medium cursor-not-allowed transition-all duration-300 flex items-center justify-center gap-2';
+            
+            const recordings = await this.db.getRecordings();
+            const recording = recordings.find(r => r.id.toString() === id);
+            
+            if (!recording) {
+                this.status.textContent = 'Nie znaleziono nagrania';
+                this.resetAudioButton();
+                return;
+            }
+            
+            // Przygotuj dane audio do wysłania
+            const recordingTitle = await this.getRecordingTitle(recording.id) || recording.name;
+            
+            // Konwertuj audio z base64 do blob
+            const byteCharacters = atob(recording.audio);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const audioBlob = new Blob([byteArray], { type: recording.mimeType });
+            
+            // Przygotuj FormData z audio i metadanymi
+            const formData = new FormData();
+            formData.append('type', 'audio');
+            formData.append('audio', audioBlob, `recording_${id}.webm`);
+            formData.append('id', recording.id.toString());
+            formData.append('title', recordingTitle);
+            formData.append('name', recording.name);
+            formData.append('date', recording.date);
+            formData.append('duration', recording.duration.toString());
+            formData.append('corrupted', (recording.corrupted || false).toString());
+            formData.append('mimeType', recording.mimeType);
+            
+            this.status.textContent = 'Wysyłam audio do webhooka...';
+            audioBtnText.textContent = 'Wysyłam...';
+            
+            // Wyślij POST request z FormData
+            const response = await fetch(webhookUrl, {
+                method: 'POST',
+                body: formData
+            });
+            
+            if (response.ok) {
+                this.status.textContent = 'Audio wysłane pomyślnie!';
+                audioIcon.textContent = '✅';
+                audioBtnText.textContent = 'Wysłano';
+                sendAudioBtn.className = 'py-3 px-6 rounded-lg bg-green-500/20 border border-green-500/30 text-green-300 font-medium cursor-not-allowed transition-all duration-300 flex items-center justify-center gap-2';
+                
+                // Przywróć przycisk po 3 sekundach
+                setTimeout(() => {
+                    this.resetAudioButton();
+                }, 3000);
+            } else {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+        } catch (error) {
+            console.error('❌ [AUDIO-WEBHOOK] Błąd wysyłania:', error);
+            this.handleWebhookError(error, audioIcon, audioBtnText, sendAudioBtn, 'resetAudioButton');
+        }
+    }
+    
+    handleWebhookError(error, icon, text, button, resetFunction) {
+        let errorMessage = 'Błąd wysyłania do webhooka';
+        
+        if (error.message.includes('Failed to fetch')) {
+            errorMessage = 'Błąd połączenia (CORS/sieć)';
+        } else if (error.message.includes('HTTP')) {
+            errorMessage = `Webhook zwrócił błąd: ${error.message}`;
+        } else if (error.message.includes('CORS')) {
+            errorMessage = 'Błąd CORS - webhook musi obsługiwać żądania z aplikacji';
+        }
+        
+        this.status.textContent = errorMessage;
+        icon.textContent = '❌';
+        text.textContent = 'Błąd';
+        button.className = 'py-3 px-6 rounded-lg bg-red-500/20 border border-red-500/30 text-red-400 font-medium cursor-not-allowed transition-all duration-300 flex items-center justify-center gap-2';
+        
+        // Przywróć przycisk po 3 sekundach
+        setTimeout(() => {
+            this[resetFunction]();
+        }, 3000);
+    }
+    
+    resetTextButton() {
+        const textIcon = document.getElementById('textIcon');
+        const textBtnText = document.getElementById('textBtnText');
+        const sendTextBtn = document.getElementById('sendTextBtn');
+        
+        if (textIcon && textBtnText && sendTextBtn) {
+            textIcon.textContent = '📝';
+            textBtnText.textContent = 'Wyślij tekst';
+            sendTextBtn.disabled = false;
+            sendTextBtn.className = 'py-3 px-6 rounded-lg bg-blue-500/20 border border-blue-500/30 text-blue-300 font-medium cursor-pointer transition-all duration-300 hover:bg-blue-500/30 hover:border-blue-500/50 active:scale-95 flex items-center justify-center gap-2';
+        }
+    }
+    
+    resetAudioButton() {
+        const audioIcon = document.getElementById('audioIcon');
+        const audioBtnText = document.getElementById('audioBtnText');
+        const sendAudioBtn = document.getElementById('sendAudioBtn');
+        
+        if (audioIcon && audioBtnText && sendAudioBtn) {
+            audioIcon.textContent = '🎵';
+            audioBtnText.textContent = 'Wyślij audio';
+            sendAudioBtn.disabled = false;
+            sendAudioBtn.className = 'py-3 px-6 rounded-lg bg-purple-500/20 border border-purple-500/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-purple-500/30 hover:border-purple-500/50 active:scale-95 flex items-center justify-center gap-2';
+        }
+    }
+    
+    // Funkcje do zarządzania cache
+    hardReload() {
+        const statusDiv = document.getElementById('cacheStatus');
+        statusDiv.innerHTML = '<span class="text-amber-400">🔄 Wymuszanie przeładowania...</span>';
+        
+        // Wymuś przeładowanie z pominięciem cache
+        setTimeout(() => {
+            window.location.reload(true);
+        }, 1000);
+    }
+    
+    async clearAllCache() {
+        const statusDiv = document.getElementById('cacheStatus');
+        
+        if (!confirm('Czy na pewno chcesz wyczyścić wszystkie dane cache? To może wymagać ponownego logowania i ustawienia konfiguracji.')) {
+            return;
+        }
+        
+        statusDiv.innerHTML = '<span class="text-red-400">🧹 Czyszczenie cache...</span>';
+        
+        try {
+            // 1. Wyczyść localStorage (zachowaj tylko ważne dane)
+            const importantKeys = ['openai_api_key', 'max_recordings', 'max_recording_time', 'backup_interval'];
+            const savedData = {};
+            
+            importantKeys.forEach(key => {
+                const value = localStorage.getItem(key);
+                if (value) savedData[key] = value;
+            });
+            
+            localStorage.clear();
+            
+            // Przywróć ważne dane
+            Object.keys(savedData).forEach(key => {
+                localStorage.setItem(key, savedData[key]);
+            });
+            
+            // 2. Wyczyść sessionStorage
+            sessionStorage.clear();
+            
+            // 3. Wyczyść Service Worker cache
+            if ('serviceWorker' in navigator) {
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                for (const registration of registrations) {
+                    await registration.unregister();
+                }
+            }
+            
+            // 4. Wyczyść Cache API
+            if ('caches' in window) {
+                const cacheNames = await caches.keys();
+                await Promise.all(
+                    cacheNames.map(cacheName => caches.delete(cacheName))
+                );
+            }
+            
+            statusDiv.innerHTML = '<span class="text-green-400">✅ Cache wyczyszczony! Przeładowywanie...</span>';
+            
+            // Przeładuj stronę po 2 sekundach
+            setTimeout(() => {
+                window.location.reload(true);
+            }, 2000);
+            
+        } catch (error) {
+            console.error('❌ [CACHE] Błąd czyszczenia cache:', error);
+            statusDiv.innerHTML = '<span class="text-red-400">❌ Błąd czyszczenia cache</span>';
+        }
+    }
+    
+    async quickClearCache() {
+        try {
+            // Wyczyść wszystko bez pytania
+            localStorage.clear();
+            sessionStorage.clear();
+            
+            // Service Worker
+            if ('serviceWorker' in navigator) {
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                for (const registration of registrations) {
+                    await registration.unregister();
+                }
+            }
+            
+            // Cache API
+            if ('caches' in window) {
+                const cacheNames = await caches.keys();
+                await Promise.all(
+                    cacheNames.map(cacheName => caches.delete(cacheName))
+                );
+            }
+            
+            // Natychmiastowe przeładowanie
+            window.location.reload(true);
+            
+        } catch (error) {
+            console.error('❌ [QUICK-CACHE] Błąd czyszczenia:', error);
+            window.location.reload(true);
         }
     }
 }
