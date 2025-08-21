@@ -10,6 +10,8 @@ class AudioRecorder {
         this.currentRecordingId = null;
         this.isResetting = false;
         this.isCancelling = false;
+        this.titleGenerationTimeout = null;
+        this.isGeneratingTitle = false;
         
         this.recordButton = document.getElementById('recordButton');
         this.status = document.getElementById('status');
@@ -113,6 +115,7 @@ class AudioRecorder {
             this.updateUI();
             this.startTimer();
             this.startBackupTimer();
+            this.startTitleGeneration();
             
         } catch (error) {
             console.error('Błąd rozpoczęcia nagrywania:', error);
@@ -144,6 +147,11 @@ class AudioRecorder {
             this.backupInterval = null;
         }
         
+        if (this.titleGenerationTimeout) {
+            clearTimeout(this.titleGenerationTimeout);
+            this.titleGenerationTimeout = null;
+        }
+        
         this.updateUI();
     }
     
@@ -151,7 +159,7 @@ class AudioRecorder {
         if (this.isRecording) {
             this.recordButton.className = 'w-24 h-24 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 text-white text-3xl cursor-pointer shadow-xl shadow-emerald-500/30 transition-all duration-300 hover:scale-105 hover:shadow-2xl hover:shadow-emerald-500/40 active:scale-95 flex items-center justify-center border-4 border-white/10 animate-pulse-scale';
             this.recordButton.innerHTML = '⏹';
-            this.status.textContent = 'Nagrywanie...';
+            this.updateRecordingTitle(); // Użyj inteligentnego tytułu
             this.recordingControls.className = 'space-y-3';
         } else {
             this.recordButton.className = 'w-24 h-24 rounded-full bg-gradient-to-br from-navigator-purple to-purple-600 text-white text-3xl cursor-pointer shadow-xl shadow-navigator-purple/30 transition-all duration-300 hover:scale-105 hover:shadow-2xl hover:shadow-navigator-purple/40 active:scale-95 flex items-center justify-center border-4 border-white/10';
@@ -184,9 +192,12 @@ class AudioRecorder {
         reader.onload = () => {
             const base64Audio = reader.result.split(',')[1];
             
+            // Sprawdź czy mamy wygenerowany tytuł
+            const generatedTitle = this.getRecordingTitle(this.currentRecordingId || Date.now());
+            
             const recording = {
                 id: this.currentRecordingId || Date.now(),
-                name: `Nagranie ${new Date().toLocaleString('pl-PL')}`,
+                name: generatedTitle || `Nagranie ${new Date().toLocaleString('pl-PL')}`,
                 date: new Date().toISOString(),
                 duration: duration,
                 audio: base64Audio,
@@ -246,11 +257,15 @@ class AudioRecorder {
             const corruptedClasses = recording.corrupted ? 'border-red-400/40 bg-red-900/20' : 'border-white/10';
             const corruptedTextClasses = recording.corrupted ? 'text-red-300' : 'text-gray-100';
             
+            // Sprawdź czy mamy wygenerowany tytuł dla tego nagrania
+            const recordingTitle = this.getRecordingTitle(recording.id);
+            const displayTitle = recordingTitle || (recording.transcription ? recording.transcription.substring(0, 60) + (recording.transcription.length > 60 ? '...' : '') : 'Brak transkrypcji');
+            
             return `
             <div class="w-full bg-white/5 backdrop-blur-sm rounded-xl py-4 px-5 mb-2 border ${corruptedClasses} flex justify-between items-center transition-all duration-200 hover:bg-white/8 hover:border-navigator-purple/30 hover:shadow-lg hover:shadow-black/10 cursor-pointer" onclick="recorder.openTranscriptionView('${recording.id}')">
                 <div class="flex-1 text-left">
                     <div class="text-sm text-gray-100 mb-1">
-                        ${recording.transcription ? recording.transcription.substring(0, 60) + (recording.transcription.length > 60 ? '...' : '') : 'Brak transkrypcji - kliknij aby otworzyć'}
+                        ${displayTitle}
                     </div>
                     <div class="text-xs text-gray-400">
                         ${Math.floor(recording.duration/60)}:${(recording.duration%60).toString().padStart(2, '0')} - ${recording.name.replace('Nagranie ', '')}
@@ -658,11 +673,14 @@ Wprowadź klucz OpenAI API:`);
         // Wypełnij dane
         document.getElementById('transcriptionTitle').textContent = `Transkrypcja: ${recording.name}`;
         
+        // Sprawdź czy mamy wygenerowany tytuł dla tego nagrania
+        const recordingTitle = this.getRecordingTitle(recording.id) || 'Brak tytułu';
+        
         document.getElementById('transcriptionMetadata').innerHTML = `
-            <strong>Nagranie:</strong> ${recording.name}<br>
+            <strong>Tytuł nagrania:</strong> ${recordingTitle}<br>
             <strong>Data:</strong> ${new Date(recording.date).toLocaleString('pl-PL')}<br>
             <strong>Czas trwania:</strong> ${Math.floor(recording.duration/60)}:${(recording.duration%60).toString().padStart(2, '0')}<br>
-            <strong>Status:</strong> ${recording.corrupted ? 'Odzyskane' : 'Normalne'}
+            <strong>Status:</strong> ${recording.corrupted ? 'Odzyskane' : 'Kompletne'}
         `;
         
         document.getElementById('transcriptionContent').textContent = recording.transcription || 'Brak transkrypcji. Kliknij przycisk "Transkrybuj" poniżej aby rozpocząć transkrypcję tego nagrania.';
@@ -810,6 +828,184 @@ Wprowadź klucz OpenAI API:`);
         } catch (error) {
             console.error('Błąd pobierania:', error);
             this.status.textContent = 'Błąd pobierania nagrania';
+        }
+    }
+    
+    startTitleGeneration() {
+        console.log('📝 [TITLE] Ustawienie timera na 5 sekund dla generowania tytułu');
+        // Po 5 sekundach wygeneruj tytuł z pierwszych 5 sekund nagrania
+        this.titleGenerationTimeout = setTimeout(async () => {
+            console.log('⏰ [TITLE] Timer 5s uruchomiony - sprawdzanie warunków');
+            console.log(`📊 [TITLE] isRecording: ${this.isRecording}, audioChunks: ${this.audioChunks.length}`);
+            
+            if (this.isRecording && this.audioChunks.length > 0) {
+                console.log('✅ [TITLE] Warunki spełnione - rozpoczynam generowanie tytułu');
+                this.isGeneratingTitle = true;
+                this.updateRecordingTitle();
+                await this.generateTitleFromCurrentAudio();
+            } else {
+                console.log('❌ [TITLE] Warunki nie spełnione - pomijam generowanie tytułu');
+            }
+        }, 5000);
+    }
+    
+    async generateTitleFromCurrentAudio() {
+        console.log('🎬 [TITLE] Rozpoczynam generowanie tytułu z audio');
+        try {
+            // Utwórz fragment z pierwszych 5 sekund
+            const audioBlob = new Blob(this.audioChunks.slice(0, 5), { type: 'audio/webm' });
+            console.log(`📦 [TITLE] Utworzono blob z ${this.audioChunks.length} chunków, rozmiar: ${audioBlob.size} bajtów`);
+            
+            if (audioBlob.size === 0) {
+                console.log('🔇 [TITLE] Audio blob pusty - ustawiam tytuł "Nagranie ciche"');
+                this.setRecordingTitle('Nagranie ciche');
+                return;
+            }
+            
+            // Sprawdź klucz API
+            const apiKey = this.getOpenAIKey();
+            console.log(`🔑 [TITLE] Sprawdzanie klucza API: ${apiKey ? 'JEST' : 'BRAK'}`);
+            if (!apiKey) {
+                console.log('❌ [TITLE] Brak klucza API - używam domyślnego tytułu');
+                this.setRecordingTitle(`Nagranie ${new Date().toLocaleString('pl-PL')}`);
+                return;
+            }
+            
+            // Wyślij do Whisper API
+            console.log('🎤 [TITLE] Przygotowuję wysyłkę do Whisper API');
+            const formData = new FormData();
+            formData.append('file', audioBlob, `title_fragment_${this.currentRecordingId}.webm`);
+            formData.append('model', 'whisper-1');
+            formData.append('language', 'pl');
+            formData.append('response_format', 'text');
+            
+            console.log('📡 [TITLE] Wysyłam do Whisper API...');
+            const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: formData
+            });
+            
+            console.log(`📥 [TITLE] Odpowiedź Whisper API: status ${whisperResponse.status}`);
+            
+            if (!whisperResponse.ok) {
+                const errorText = await whisperResponse.text();
+                console.error(`❌ [TITLE] Błąd Whisper API: ${whisperResponse.status} - ${errorText}`);
+                throw new Error(`Whisper API error: ${whisperResponse.status}`);
+            }
+            
+            const transcriptionText = await whisperResponse.text();
+            console.log(`📝 [TITLE] Otrzymana transkrypcja: "${transcriptionText}"`);
+            
+            if (!transcriptionText.trim()) {
+                console.log('🔇 [TITLE] Pusta transkrypcja - ustawiam "Nagranie bez słów"');
+                this.setRecordingTitle('Nagranie bez słów');
+                return;
+            }
+            
+            // Wyślij do GPT-4o-nano dla wygenerowania tytułu
+            console.log('🤖 [TITLE] Wysyłam transkrypcję do GPT-4o-nano');
+            const title = await this.generateTitleWithGPT(transcriptionText.trim());
+            console.log(`📄 [TITLE] Otrzymany tytuł: "${title}"`);
+            this.setRecordingTitle(title);
+            
+        } catch (error) {
+            console.error('❌ [TITLE] Błąd generowania tytułu:', error);
+            console.error('❌ [TITLE] Stack trace:', error.stack);
+            this.setRecordingTitle(`Nagranie ${new Date().toLocaleString('pl-PL')}`);
+        } finally {
+            console.log('🏁 [TITLE] Zakończono proces generowania tytułu');
+            this.isGeneratingTitle = false;
+            this.updateRecordingTitle();
+        }
+    }
+    
+    async generateTitleWithGPT(transcription) {
+        console.log(`🤖 [GPT] Rozpoczynam generowanie tytułu dla transkrypcji: "${transcription.substring(0, 100)}..."`);
+        try {
+            const apiKey = this.getOpenAIKey();
+            console.log(`🔑 [GPT] Użycie klucza API: ${apiKey ? 'JEST' : 'BRAK'}`);
+            
+            const payload = {
+                model: 'gpt-4.1-nano',
+                messages: [{
+                    role: 'user',
+                    content: `Na podstawie tej transkrypcji stwórz krótki, opisowy tytuł (max 50 znaków):\n\n${transcription}\n\nOdpowiedz tylko tytułem, bez dodatkowego tekstu.`
+                }],
+                max_tokens: 20,
+                temperature: 0.7
+            };
+            
+            console.log('📡 [GPT] Wysyłam request do GPT-4.1-nano:', JSON.stringify(payload, null, 2));
+            
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify(payload)
+            });
+            
+            console.log(`📥 [GPT] Odpowiedź API: status ${response.status}`);
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error(`❌ [GPT] Błąd API: ${response.status} - ${errorText}`);
+                throw new Error(`GPT API error: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            console.log('📄 [GPT] Pełna odpowiedź:', JSON.stringify(data, null, 2));
+            
+            const title = data.choices[0]?.message?.content?.trim();
+            console.log(`✅ [GPT] Wyciągnięty tytuł: "${title}"`);
+            
+            return title || `Nagranie ${new Date().toLocaleString('pl-PL')}`;
+            
+        } catch (error) {
+            console.error('❌ [GPT] Błąd GPT API:', error);
+            console.error('❌ [GPT] Stack trace:', error.stack);
+            return `Nagranie ${new Date().toLocaleString('pl-PL')}`;
+        }
+    }
+    
+    setRecordingTitle(title) {
+        console.log(`💾 [TITLE] Zapisuję tytuł "${title}" dla nagrania ${this.currentRecordingId}`);
+        // Zapisz tytuł w localStorage dla aktualnego nagrania
+        const recordingTitles = JSON.parse(localStorage.getItem('recordingTitles') || '{}');
+        recordingTitles[this.currentRecordingId] = title;
+        localStorage.setItem('recordingTitles', JSON.stringify(recordingTitles));
+        console.log('💾 [TITLE] Tytuł zapisany w localStorage');
+        
+        // Natychmiast zaktualizuj interfejs
+        this.updateRecordingTitle();
+    }
+    
+    getRecordingTitle(id) {
+        const recordingTitles = JSON.parse(localStorage.getItem('recordingTitles') || '{}');
+        const title = recordingTitles[id] || null;
+        console.log(`🔍 [TITLE] Pobieranie tytułu dla ${id}: "${title}"`);
+        return title;
+    }
+    
+    updateRecordingTitle() {
+        if (!this.isRecording) return;
+        
+        const currentTitle = this.getRecordingTitle(this.currentRecordingId);
+        console.log(`🔄 [TITLE] Aktualizacja interfejsu - isGeneratingTitle: ${this.isGeneratingTitle}, currentTitle: "${currentTitle}"`);
+        
+        if (this.isGeneratingTitle) {
+            this.status.textContent = 'Nagrywanie... (tworzenie tytułu)';
+            console.log('🔄 [TITLE] Status: Nagrywanie... (tworzenie tytułu)');
+        } else if (currentTitle) {
+            this.status.textContent = `Nagrywanie: ${currentTitle}`;
+            console.log(`🔄 [TITLE] Status: Nagrywanie: ${currentTitle}`);
+        } else {
+            this.status.textContent = 'Nagrywanie...';
+            console.log('🔄 [TITLE] Status: Nagrywanie...');
         }
     }
 }
