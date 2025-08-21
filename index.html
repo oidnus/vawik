@@ -86,7 +86,10 @@
         </div>
     </div>
 
-    <div class="h-10"></div>
+    <!-- Footer -->
+    <footer class="text-center py-4 px-5 bg-navigator-dark/50 border-t border-navigator-purple/10 text-gray-500 text-sm">
+        Vawik v0.1
+    </footer>
 
     <!-- Pełnoekranowy widok transkrypcji -->
     <div class="fixed inset-0 w-full h-full bg-gradient-to-br from-navigator-dark via-navigator-mid to-navigator-blue z-[1000] hidden flex-col p-5 overflow-y-auto" id="transcriptionFullscreen">
@@ -97,6 +100,24 @@
             </button>
         </div>
         <div class="mb-5 p-4 bg-navigator-purple/10 rounded-lg border-l-4 border-navigator-purple text-sm text-gray-400" id="transcriptionMetadata"></div>
+        <div class="mb-5 flex gap-3 flex-wrap" id="transcriptionActions">
+            <button class="py-3 px-6 rounded-lg bg-blue-500/20 border border-blue-500/30 text-blue-300 font-medium cursor-pointer transition-all duration-300 hover:bg-blue-500/30 hover:border-blue-500/50 active:scale-95 flex items-center justify-center gap-2" id="playRecordingBtn">
+                <span class="text-lg">▶️</span>
+                Odtwórz
+            </button>
+            <button class="py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2" id="transcribeRecordingBtn">
+                <span class="text-lg" id="transcribeIcon">🎤</span>
+                <span id="transcribeText">Transkrybuj</span>
+            </button>
+            <button class="py-3 px-6 rounded-lg bg-green-500/20 border border-green-500/30 text-green-300 font-medium cursor-pointer transition-all duration-300 hover:bg-green-500/30 hover:border-green-500/50 active:scale-95 flex items-center justify-center gap-2" id="downloadRecordingBtn">
+                <span class="text-lg">⬇️</span>
+                Pobierz
+            </button>
+            <button class="py-3 px-6 rounded-lg bg-red-500/20 border border-red-500/30 text-red-400 font-medium cursor-pointer transition-all duration-300 hover:bg-red-500/30 hover:border-red-500/50 active:scale-95 flex items-center justify-center gap-2" id="deleteRecordingBtn">
+                <span class="text-lg">🗑️</span>
+                Usuń
+            </button>
+        </div>
         <div class="flex-1 bg-gray-800/80 backdrop-blur-lg rounded-2xl p-8 border border-navigator-purple/20 text-lg leading-relaxed text-gray-200 overflow-y-auto" id="transcriptionContent"></div>
     </div>
 

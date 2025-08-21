@@ -247,10 +247,10 @@ class AudioRecorder {
             const corruptedTextClasses = recording.corrupted ? 'text-red-300' : 'text-gray-100';
             
             return `
-            <div class="w-full bg-white/5 backdrop-blur-sm rounded-xl py-4 px-5 mb-2 border ${corruptedClasses} flex justify-between items-center transition-all duration-200 hover:bg-white/8 hover:border-navigator-purple/30 hover:shadow-lg hover:shadow-black/10">
+            <div class="w-full bg-white/5 backdrop-blur-sm rounded-xl py-4 px-5 mb-2 border ${corruptedClasses} flex justify-between items-center transition-all duration-200 hover:bg-white/8 hover:border-navigator-purple/30 hover:shadow-lg hover:shadow-black/10 cursor-pointer" onclick="recorder.openTranscriptionView('${recording.id}')">
                 <div class="flex-1 text-left">
                     <div class="text-sm text-gray-100 mb-1">
-                        Przykładowy tekst nagrania
+                        ${recording.transcription ? recording.transcription.substring(0, 60) + (recording.transcription.length > 60 ? '...' : '') : 'Brak transkrypcji - kliknij aby otworzyć'}
                     </div>
                     <div class="text-xs text-gray-400">
                         ${Math.floor(recording.duration/60)}:${(recording.duration%60).toString().padStart(2, '0')} - ${recording.name.replace('Nagranie ', '')}
@@ -258,15 +258,9 @@ class AudioRecorder {
                     </div>
                 </div>
                 <div class="flex gap-1 items-center ml-auto">
-                    <button class="p-2 border-0 cursor-pointer text-lg transition-all duration-200 text-blue-300 hover:text-blue-100 hover:scale-110" onclick="recorder.playRecording('${recording.id}')">
-                        ▶️
-                    </button>
-                    <button class="${this.getTranscribeButtonClassesMinimal(recording)}" 
-                            onclick="${recording.transcription ? `recorder.openTranscriptionView('${recording.id}')` : `recorder.transcribeRecording('${recording.id}')`}"
-                            ${recording.transcribing ? 'disabled' : ''}>
-                        ${recording.transcribing ? '⏳' : 
-                          recording.transcription ? '📄' : '🎤'}
-                    </button>
+                    ${recording.transcription ? '<span class="text-emerald-400 text-lg">📄</span>' : 
+                      recording.transcribing ? '<span class="text-gray-400 text-lg">⏳</span>' : 
+                      '<span class="text-navigator-purple text-lg">🎤</span>'}
                 </div>
             </div>
         `}).join('');
@@ -656,8 +650,8 @@ Wprowadź klucz OpenAI API:`);
         const recordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
         const recording = recordings.find(r => r.id.toString() === id);
         
-        if (!recording || !recording.transcription) {
-            this.status.textContent = 'Brak transkrypcji do wyświetlenia';
+        if (!recording) {
+            this.status.textContent = 'Nie znaleziono nagrania';
             return;
         }
         
@@ -671,7 +665,57 @@ Wprowadź klucz OpenAI API:`);
             <strong>Status:</strong> ${recording.corrupted ? 'Odzyskane' : 'Normalne'}
         `;
         
-        document.getElementById('transcriptionContent').textContent = recording.transcription;
+        document.getElementById('transcriptionContent').textContent = recording.transcription || 'Brak transkrypcji. Kliknij przycisk "Transkrybuj" poniżej aby rozpocząć transkrypcję tego nagrania.';
+        
+        // Skonfiguruj przyciski
+        const playBtn = document.getElementById('playRecordingBtn');
+        const transcribeBtn = document.getElementById('transcribeRecordingBtn');
+        const downloadBtn = document.getElementById('downloadRecordingBtn');
+        const deleteBtn = document.getElementById('deleteRecordingBtn');
+        const transcribeIcon = document.getElementById('transcribeIcon');
+        const transcribeText = document.getElementById('transcribeText');
+        
+        // Przycisk odtwarzania
+        playBtn.onclick = () => this.playRecording(id);
+        
+        // Przycisk pobierania
+        downloadBtn.onclick = () => this.downloadRecording(id);
+        
+        // Przycisk usuwania
+        deleteBtn.onclick = () => this.deleteRecording(id);
+        
+        // Przycisk transkrypcji
+        if (recording.transcribing) {
+            transcribeIcon.textContent = '⏳';
+            transcribeText.textContent = 'Transkrybowanie...';
+            transcribeBtn.disabled = true;
+            transcribeBtn.className = 'py-3 px-6 rounded-lg bg-gray-500/20 border border-gray-500/30 text-gray-400 font-medium cursor-not-allowed transition-all duration-300 flex items-center justify-center gap-2';
+        } else if (recording.transcription) {
+            transcribeIcon.textContent = '🔄';
+            transcribeText.textContent = 'Transkrybuj ponownie';
+            transcribeBtn.disabled = false;
+            transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
+            transcribeBtn.onclick = () => {
+                // Usuń istniejącą transkrypcję i rozpocznij nową
+                const updatedRecordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
+                const recordingIndex = updatedRecordings.findIndex(r => r.id.toString() === id);
+                if (recordingIndex !== -1) {
+                    delete updatedRecordings[recordingIndex].transcription;
+                    localStorage.setItem('audioRecordings', JSON.stringify(updatedRecordings));
+                }
+                this.transcribeRecording(id);
+                this.openTranscriptionView(id); // Odśwież widok
+            };
+        } else {
+            transcribeIcon.textContent = '🎤';
+            transcribeText.textContent = 'Transkrybuj';
+            transcribeBtn.disabled = false;
+            transcribeBtn.className = 'py-3 px-6 rounded-lg bg-navigator-purple/20 border border-navigator-purple/30 text-purple-300 font-medium cursor-pointer transition-all duration-300 hover:bg-navigator-purple/30 hover:border-navigator-purple/50 active:scale-95 flex items-center justify-center gap-2';
+            transcribeBtn.onclick = () => {
+                this.transcribeRecording(id);
+                this.openTranscriptionView(id); // Odśwież widok
+            };
+        }
         
         // Pokaż pełnoekranowy widok
         const fullscreen = document.getElementById('transcriptionFullscreen');
@@ -688,6 +732,85 @@ Wprowadź klucz OpenAI API:`);
         
         // Przywróć scrollowanie body
         document.body.style.overflow = 'auto';
+    }
+    
+    deleteRecording(id) {
+        const recordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
+        const recording = recordings.find(r => r.id.toString() === id);
+        
+        if (!recording) {
+            this.status.textContent = 'Nie znaleziono nagrania';
+            return;
+        }
+        
+        const confirmMessage = `Czy na pewno chcesz usunąć nagranie?\n\n"${recording.name}"\nCzas trwania: ${Math.floor(recording.duration/60)}:${(recording.duration%60).toString().padStart(2, '0')}`;
+        
+        if (confirm(confirmMessage)) {
+            // Usuń nagranie z listy
+            const updatedRecordings = recordings.filter(r => r.id.toString() !== id);
+            localStorage.setItem('audioRecordings', JSON.stringify(updatedRecordings));
+            
+            // Zamknij widok transkrypcji
+            this.closeTranscriptionView();
+            
+            // Odśwież listę nagrań
+            this.loadRecordings();
+            
+            this.status.textContent = 'Nagranie zostało usunięte';
+            setTimeout(() => {
+                this.status.textContent = 'Dotknij aby nagrać';
+            }, 2000);
+        }
+    }
+    
+    downloadRecording(id) {
+        const recordings = JSON.parse(localStorage.getItem('audioRecordings') || '[]');
+        const recording = recordings.find(r => r.id.toString() === id);
+        
+        if (!recording) {
+            this.status.textContent = 'Nie znaleziono nagrania';
+            return;
+        }
+        
+        try {
+            // Konwersja base64 z powrotem do blob
+            const byteCharacters = atob(recording.audio);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const audioBlob = new Blob([byteArray], { type: recording.mimeType });
+            
+            // Utwórz URL i link do pobrania
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const downloadLink = document.createElement('a');
+            downloadLink.href = audioUrl;
+            
+            // Nazwa pliku z datą
+            const date = new Date(recording.date);
+            const fileName = `vawik_nagranie_${date.getFullYear()}-${(date.getMonth()+1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}_${date.getHours().toString().padStart(2, '0')}-${date.getMinutes().toString().padStart(2, '0')}.webm`;
+            
+            downloadLink.download = fileName;
+            downloadLink.style.display = 'none';
+            
+            // Dodaj do DOM, kliknij i usuń
+            document.body.appendChild(downloadLink);
+            downloadLink.click();
+            document.body.removeChild(downloadLink);
+            
+            // Zwolnij URL
+            URL.revokeObjectURL(audioUrl);
+            
+            this.status.textContent = 'Nagranie zostało pobrane';
+            setTimeout(() => {
+                this.status.textContent = 'Dotknij aby nagrać';
+            }, 2000);
+            
+        } catch (error) {
+            console.error('Błąd pobierania:', error);
+            this.status.textContent = 'Błąd pobierania nagrania';
+        }
     }
 }
 
